@@ -30,7 +30,7 @@ class MdCommunicationIT {
     void testRequestReply() throws Exception {
         int comId = 2000;
         int replierPort = 19100;
-        int requesterPort = 19101;
+        int requesterPort = 17225;
         
         byte[] requestData = "Hello TRDP MD".getBytes();
         byte[] replyData = "Reply from TRDP MD".getBytes();

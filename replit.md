@@ -4,7 +4,7 @@
 This is a production-ready Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in IEC 61375-2-3. The library provides comprehensive support for railway train communication networks.
 
 ## Project Structure
-- **Language**: Java 19
+- **Language**: Java 17
 - **Build Tool**: Maven 3.8.6
 - **Testing**: JUnit 5 with Mockito and AssertJ
 - **CI/CD**: GitHub Actions

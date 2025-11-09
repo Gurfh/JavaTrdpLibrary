@@ -1,6 +1,6 @@
 # TRDP Protocol Library
 [![JitPack](https://jitpack.io/v/Gurfh/JavaTrdpLibrary.svg)](https://jitpack.io/#Gurfh/JavaTrdpLibrary)
-
+ 
 A production-ready Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in IEC 61375-2-3. This library provides comprehensive support for Process Data (PD) and Message Data (MD) communication patterns used in railway train communication networks.
 
 ## Features
@@ -46,15 +46,28 @@ A production-ready Java implementation of the Train Real-Time Data Protocol (TRD
 - Maven 3.8+
 
 ## Installation
+ 
+This library is hosted on **JitPack**. To use it, you need to add the JitPack repository and then the dependency to your `pom.xml`.
 
-Add the following dependency to your `pom.xml`:
-
+**1. Add the JitPack repository:**
 ```xml
-<dependency>
-    <groupId>com.trdp</groupId>
-    <artifactId>trdp-protocol</artifactId>
-    <version>1.0.0</version>
-</dependency>
+<repositories>
+    <repository>
+        <id>jitpack.io</id>
+        <url>[https://jitpack.io](https://jitpack.io)</url>
+    </repository>
+</repositories>
+```
+
+**2. Add the dependency:**
+
+For a stable release (e.g., based on a Git tag like `v1.0.0`):
+```xml
+ <dependency>
+     <groupId>com.trdp</groupId>
+     <artifactId>trdp-protocol</artifactId>
+    <version>v1.0.0</version>
+ </dependency>
 ```
 
 ## Usage

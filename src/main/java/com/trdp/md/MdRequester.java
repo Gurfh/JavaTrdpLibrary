@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch; // Import CountDownLatch
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -22,7 +23,8 @@ public class MdRequester implements AutoCloseable {
     private final AtomicInteger sequenceCounter;
     private final ConcurrentHashMap<Integer, CompletableFuture<MdReply>> pendingRequests;
     private volatile boolean running;
-    
+    private final CountDownLatch listenerReadyLatch = new CountDownLatch(1); // Add this latch
+
     public MdRequester(int localPort) throws IOException {
         this.transport = new UdpTransport(localPort);
         this.sequenceCounter = new AtomicInteger(0);
@@ -30,6 +32,23 @@ public class MdRequester implements AutoCloseable {
         this.running = true;
         
         startReplyListener();
+        
+        // Add this block to wait for the listener thread to be ready
+        try {
+            if (!listenerReadyLatch.await(5, TimeUnit.SECONDS)) {
+                // Handle timeout: close transport and throw exception
+                running = false;
+                transport.close();
+                throw new IOException("MD Requester listener thread failed to start in time.");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            // Handle interruption: close transport and throw exception
+            running = false;
+            transport.close();
+            throw new IOException("Interrupted while waiting for listener to start", e);
+        }
+        
         logger.info("MD Requester created on port {}", localPort);
     }
     
@@ -94,6 +113,8 @@ public class MdRequester implements AutoCloseable {
     private void startReplyListener() {
         Thread listener = new Thread(() -> {
             byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
+            
+            listenerReadyLatch.countDown(); // Add this line to signal readiness
             
             while (running) {
                 try {

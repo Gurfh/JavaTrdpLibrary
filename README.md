@@ -1,6 +1,6 @@
 # TRDP Protocol Library
 [![JitPack](https://jitpack.io/v/Gurfh/JavaTrdpLibrary.svg)](https://jitpack.io/#Gurfh/JavaTrdpLibrary)
-[![codecov](https://codecov.io/gh/Gurfh/JavaTrdpLibrary/branch/main/graph/badge.svg)](https://app.codecov.io/gh/Gurfh/JavaTrdpLibrary)
+[![codecov](https://codecov.io/gh/Gurfh/JavaTrdpLibrary/branch/master/graph/badge.svg)](https://app.codecov.io/gh/Gurfh/JavaTrdpLibrary)
 
 
 A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in IEC 61375-2-3. This library provides comprehensive support for Process Data (PD) and Message Data (MD) communication patterns used in railway train communication networks.

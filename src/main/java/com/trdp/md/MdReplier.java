@@ -1,5 +1,6 @@
 package com.trdp.md;
 
+import com.trdp.network.ReceivedPacket; // Import ReceivedPacket
 import com.trdp.network.UdpTransport;
 import com.trdp.protocol.TrdpConstants;
 import com.trdp.protocol.TrdpHeader;
@@ -50,9 +51,13 @@ public class MdReplier implements AutoCloseable {
         
         while (running) {
             try {
-                int length = transport.receive(buffer, TrdpConstants.DEFAULT_MD_TIMEOUT_MS);
-                if (length > 0) {
-                    processRequest(buffer, length);
+                // Use receiveWithSource to get the packet and its source
+                ReceivedPacket received = transport.receiveWithSource(buffer, TrdpConstants.DEFAULT_MD_TIMEOUT_MS);
+                
+                if (received != null) {
+                    // Pass source details to processRequest
+                    processRequest(received.getData(), received.getLength(), 
+                                   received.getSourceAddress(), received.getSourcePort());
                 }
             } catch (IOException e) {
                 if (running) {
@@ -62,7 +67,8 @@ public class MdReplier implements AutoCloseable {
         }
     }
     
-    private void processRequest(byte[] buffer, int length) {
+    // Add sourceAddress and sourcePort parameters
+    private void processRequest(byte[] buffer, int length, InetAddress sourceAddress, int sourcePort) {
         try {
             byte[] packetData = new byte[length];
             System.arraycopy(buffer, 0, packetData, 0, length);
@@ -78,14 +84,29 @@ public class MdReplier implements AutoCloseable {
                                                      requestPacket.getPayload());
             
             if (replyData != null) {
-                sendReply(requestPacket, replyData);
+                // Get the reply IP from the TRDP header (as per spec)
+                int replyIp = requestPacket.getHeader().getReplyIpAddress();
+                InetAddress replyAddress = InetAddress.getByAddress(new byte[] {
+                    (byte)((replyIp >> 24) & 0xFF),
+                    (byte)((replyIp >> 16) & 0xFF),
+                    (byte)((replyIp >> 8) & 0xFF),
+                    (byte)(replyIp & 0xFF)
+                });
+
+                // Get the reply port from the UDP packet source
+                int replyPort = sourcePort;
+
+                sendReply(requestPacket, replyData, replyAddress, replyPort);
             }
         } catch (Exception e) {
             logger.error("Error processing MD request", e);
         }
     }
     
-    private void sendReply(TrdpPacket requestPacket, byte[] replyData) throws IOException {
+    // Add replyAddress and replyPort parameters
+    private void sendReply(TrdpPacket requestPacket, byte[] replyData, 
+                           InetAddress replyAddress, int replyPort) throws IOException {
+        
         TrdpHeader replyHeader = new TrdpHeader();
         replyHeader.setSequenceCounter(requestPacket.getHeader().getSequenceCounter());
         replyHeader.setMessageType(TrdpMessageType.MD_REPLY);
@@ -96,15 +117,9 @@ public class MdReplier implements AutoCloseable {
         TrdpPacket replyPacket = new TrdpPacket(replyHeader, replyData);
         byte[] encodedPacket = replyPacket.encode();
         
-        int replyIp = requestPacket.getHeader().getReplyIpAddress();
-        InetAddress replyAddress = InetAddress.getByAddress(new byte[] {
-            (byte)((replyIp >> 24) & 0xFF),
-            (byte)((replyIp >> 16) & 0xFF),
-            (byte)((replyIp >> 8) & 0xFF),
-            (byte)(replyIp & 0xFF)
-        });
+        // Send to the replyAddress (from header) and replyPort (from UDP source)
+        transport.send(encodedPacket, replyAddress, replyPort);
         
-        transport.send(encodedPacket, replyAddress, TrdpConstants.DEFAULT_MD_PORT);
         logger.debug("Sent MD reply: ComID={}, SeqNo={}", 
                    replyHeader.getComId(), replyHeader.getSequenceCounter());
     }

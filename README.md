@@ -311,8 +311,8 @@ com.trdp
 
 ```bash
 # Clone the repository
-git clone https://github.com/trdp/trdp-protocol.git
-cd trdp-protocol
+git clone https://github.com/Gurfh/JavaTrdpLibrary
+cd JavaTrdpLibrary
 
 # Build the project
 mvn clean install
@@ -411,8 +411,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Support
 
 For issues, questions, or contributions:
-- GitHub Issues: https://github.com/trdp/trdp-protocol/issues
-- Documentation: https://github.com/trdp/trdp-protocol/wiki
+- GitHub Issues: https://github.com/Gurfh/JavaTrdpLibrary/issues
 
 ## Changelog
 

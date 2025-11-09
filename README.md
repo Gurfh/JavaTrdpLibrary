@@ -8,21 +8,31 @@ A production-ready Java implementation of the Train Real-Time Data Protocol (TRD
   - Process Data (PD) for cyclic data exchange
   - Message Data (MD) for request/reply communication
   - Full compliance with IEC 61375-2-3 specification
+  - CRC32 checksums per IEEE 802.3
+
+- **TRDP Data Type System**
+  - Standard IEC 61375-2-3 data types (INT8, INT16, INT32, UINT8, UINT16, UINT32, REAL32, REAL64, etc.)
+  - Big Endian encoding (network byte order)
+  - Dataset builder for structured data
+  - Type-safe encoder/decoder utilities
+  - TIMEDATE timestamp support
 
 - **Process Data (PD) Support**
   - Publisher/Subscriber pattern
   - UDP multicast and unicast communication
   - Automatic sequence numbering
   - Configurable ComIDs and timeouts
+  - Structured data payloads with TrdpDataset
 
 - **Message Data (MD) Support**
   - Request/Reply pattern
   - Asynchronous communication with CompletableFuture
   - Configurable request handlers
   - Timeout management
+  - Proper reply routing with ReplyComId and ReplyIpAddress
 
 - **Production-Ready Features**
-  - Comprehensive unit and integration tests
+  - Comprehensive unit and integration tests (52 tests)
   - Thread-safe implementation
   - Proper resource management with AutoCloseable
   - SLF4J logging integration
@@ -135,6 +145,113 @@ try (MdReplier replier = new MdReplier(17226, handler)) {
 }
 ```
 
+### Working with Structured Data (TRDP Data Types)
+
+#### Using TrdpDataset with Process Data
+
+```java
+import com.trdp.util.TrdpDataset;
+import com.trdp.util.TrdpDataType;
+import com.trdp.pd.PdPublisher;
+import com.trdp.pd.PdSubscriber;
+import java.time.Instant;
+import java.util.Arrays;
+import java.util.List;
+
+// Create structured data for train telemetry
+TrdpDataset trainData = new TrdpDataset()
+    .addUInt16("trainId", 1234)
+    .addUInt8("carNumber", 3)
+    .addReal32("speed", 85.5f)
+    .addReal32("temperature", 22.3f)
+    .addBool8("doorsClosed", true)
+    .addBool8("emergencyBrake", false)
+    .addUInt32("odometer", 567890L)
+    .addTimeDate64("timestamp", Instant.now());
+
+// Encode the dataset to bytes
+byte[] encodedData = trainData.encode();
+
+// Publish the structured data
+try (PdPublisher publisher = new PdPublisher(3000, "239.255.0.1", 19200)) {
+    publisher.publish(encodedData);
+}
+
+// Subscribe and decode the data
+List<TrdpDataset.FieldDefinition> schema = Arrays.asList(
+    new TrdpDataset.FieldDefinition("trainId", TrdpDataType.UINT16),
+    new TrdpDataset.FieldDefinition("carNumber", TrdpDataType.UINT8),
+    new TrdpDataset.FieldDefinition("speed", TrdpDataType.REAL32),
+    new TrdpDataset.FieldDefinition("temperature", TrdpDataType.REAL32),
+    new TrdpDataset.FieldDefinition("doorsClosed", TrdpDataType.BOOL8),
+    new TrdpDataset.FieldDefinition("emergencyBrake", TrdpDataType.BOOL8),
+    new TrdpDataset.FieldDefinition("odometer", TrdpDataType.UINT32),
+    new TrdpDataset.FieldDefinition("timestamp", TrdpDataType.TIMEDATE64)
+);
+
+try (PdSubscriber subscriber = new PdSubscriber(3000, "239.255.0.1", 19200)) {
+    subscriber.addListener((comId, data, seqNo) -> {
+        TrdpDataset decoded = TrdpDataset.decode(data, schema);
+        
+        int trainId = (int) decoded.getValue("trainId");
+        float speed = (float) decoded.getValue("speed");
+        boolean doorsClosed = (boolean) decoded.getValue("doorsClosed");
+        
+        System.out.println("Train " + trainId + " at " + speed + " km/h");
+        System.out.println("Doors closed: " + doorsClosed);
+    });
+    
+    subscriber.start();
+    Thread.sleep(60000);
+}
+```
+
+#### Using TrdpEncoder/TrdpDecoder Directly
+
+```java
+import com.trdp.util.TrdpEncoder;
+import com.trdp.util.TrdpDecoder;
+
+// Encode individual values
+TrdpEncoder encoder = new TrdpEncoder(100);
+encoder.putInt32(12345)
+       .putReal32(3.14f)
+       .putBool8(true)
+       .putString("TRAIN", 16);
+
+byte[] encoded = encoder.toByteArray();
+
+// Decode the values
+TrdpDecoder decoder = new TrdpDecoder(encoded);
+int value = decoder.getInt32();
+float pi = decoder.getReal32();
+boolean flag = decoder.getBool8();
+String label = decoder.getString(16);
+```
+
+### Supported Data Types
+
+| Type | Java Type | Size | Description |
+|------|-----------|------|-------------|
+| BOOL8 | boolean | 1 byte | Boolean value |
+| CHAR8 | char | 1 byte | 8-bit character |
+| UTF16 | char | 2 bytes | Unicode character |
+| INT8 | byte | 1 byte | Signed 8-bit integer |
+| INT16 | short | 2 bytes | Signed 16-bit integer |
+| INT32 | int | 4 bytes | Signed 32-bit integer |
+| INT64 | long | 8 bytes | Signed 64-bit integer |
+| UINT8 | int | 1 byte | Unsigned 8-bit integer (0-255) |
+| UINT16 | int | 2 bytes | Unsigned 16-bit integer (0-65535) |
+| UINT32 | long | 4 bytes | Unsigned 32-bit integer |
+| UINT64 | long | 8 bytes | Unsigned 64-bit integer |
+| REAL32 | float | 4 bytes | IEEE 754 single-precision |
+| REAL64 | double | 8 bytes | IEEE 754 double-precision |
+| TIMEDATE32 | Instant | 4 bytes | Seconds since epoch |
+| TIMEDATE48 | Instant | 6 bytes | Seconds + microseconds |
+| TIMEDATE64 | Instant | 8 bytes | Seconds + microseconds |
+
+All multi-byte values are encoded in **Big Endian** (network byte order) format as per IEC 61375-2-3.
+
 ## Protocol Details
 
 ### TRDP Header Structure
@@ -181,6 +298,11 @@ com.trdp
 │   ├── MdReplier       # MD replier implementation
 │   ├── MdReply         # MD reply data structure
 │   └── MdRequestHandler # Request handler interface
+├── util             # Data type utilities
+│   ├── TrdpDataType    # Data type enumeration
+│   ├── TrdpEncoder     # Type-safe data encoder
+│   ├── TrdpDecoder     # Type-safe data decoder
+│   └── TrdpDataset     # Dataset builder/parser
 └── network          # Network layer
     └── UdpTransport    # UDP transport implementation
 ```

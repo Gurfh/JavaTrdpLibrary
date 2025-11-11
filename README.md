@@ -28,7 +28,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Structured data payloads with TrdpDataset
 
 - **Message Data (MD) Support**
-  - Request/Reply pattern
+  - Request/Reply pattern over UDP and TCP
   - Asynchronous communication with CompletableFuture
   - Configurable request handlers
   - Timeout management
@@ -119,11 +119,12 @@ try (PdSubscriber subscriber = new PdSubscriber(1000, "239.255.0.1", 17224)) {
 ```java
 import com.trdp.md.MdRequester;
 import com.trdp.md.MdReply;
+import com.trdp.md.TransportProtocol;
 import java.util.concurrent.CompletableFuture;
 
 // Create a requester
 try (MdRequester requester = new MdRequester(17225)) {
-    // Send a request
+    // Send a UDP request (default)
     byte[] requestData = "Request Data".getBytes();
     CompletableFuture<MdReply> future = requester.sendRequest(
         2000,                    // ComID
@@ -135,6 +136,19 @@ try (MdRequester requester = new MdRequester(17225)) {
     // Wait for reply
     MdReply reply = future.get();
     System.out.println("Reply data: " + new String(reply.getData()));
+
+    // Send a TCP request
+    CompletableFuture<MdReply> tcpFuture = requester.sendRequest(
+        2001,
+        "TCP Request".getBytes(),
+        "192.168.1.100",
+        17226,
+        2001,
+        TransportProtocol.TCP
+    );
+
+    MdReply tcpReply = tcpFuture.get();
+    System.out.println("TCP Reply: " + new String(tcpReply.getData()));
 }
 ```
 
@@ -272,7 +286,9 @@ All multi-byte values are encoded in **Big Endian** (network byte order) format 
 
 ### TRDP Header Structure
 
-The library implements the full TRDP header structure as specified in IEC 61375-2-3:
+The library implements the full TRDP header structure as specified in IEC 61375-2-3.
+
+**PD Header (40 bytes):**
 
 - Sequence Counter (4 bytes)
 - Protocol Version (2 bytes)
@@ -286,6 +302,39 @@ The library implements the full TRDP header structure as specified in IEC 61375-
 - Reply IP Address (4 bytes)
 - Header FCS (4 bytes, Little Endian CRC32)
 
+**MD Header (116 bytes):**
+
+- Sequence Counter (4 bytes)
+- Protocol Version (2 bytes)
+- Message Type (2 bytes)
+- Communication ID (4 bytes)
+- Dataset Length (4 bytes)
+- Reply ComID (4 bytes)
+- Reply IP Address (4 bytes)
+- Reply Status (4 bytes)
+- Session ID (16 bytes)
+- Reply Timeout (4 bytes)
+- Source URI (32 bytes)
+- Destination URI (32 bytes)
+- Header FCS (4 bytes, Little Endian CRC32)
+
+### Message Types
+
+The library supports the following TRDP message types:
+
+| Type | Code | Description |
+|---|---|---|
+| PD | 0x5064 | Process Data |
+| PD_REQUEST | 0x5072 | Process Data Request |
+| PD_REPLY | 0x5070 | Process Data Reply |
+| PD_ERROR | 0x5065 | Process Data Error |
+| MD_REQUEST | 0x4D72 | Message Data Request |
+| MD_REPLY | 0x4D70 | Message Data Reply |
+| MD_CONFIRM | 0x4D63 | Message Data Confirm |
+| MD_ERROR | 0x4D65 | Message Data Error |
+| MD_NOTIFICATION | 0x4D6E | Message Data Notification |
+| MD_REPLY_CONFIRM | 0x4D71 | Message Data Reply with Confirm |
+
 ### Default Ports and Settings
 
 - PD Default Port: 17224 (UDP)
@@ -293,8 +342,8 @@ The library implements the full TRDP header structure as specified in IEC 61375-
 - Default Multicast Group: 239.255.0.1
 - Default PD Timeout: 1000ms
 - Default MD Timeout: 5000ms
-- Maximum PD Data Size: 1388 bytes
-- Maximum MD Data Size: 1364 bytes
+- Maximum PD Data Size: 1432 bytes
+- Maximum MD Data Size: 1400 bytes
 
 ## Architecture
 
@@ -320,7 +369,8 @@ com.trdp
 │   ├── TrdpDecoder     # Type-safe data decoder
 │   └── TrdpDataset     # Dataset builder/parser
 └── network          # Network layer
-    └── UdpTransport    # UDP transport implementation
+    ├── UdpTransport    # UDP transport implementation
+    └── TcpTransport    # TCP transport implementation
 ```
 
 ## Building from Source

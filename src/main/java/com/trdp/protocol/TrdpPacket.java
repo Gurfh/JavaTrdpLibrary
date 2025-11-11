@@ -32,22 +32,35 @@ public class TrdpPacket {
     }
     
     public static TrdpPacket decode(byte[] data) {
-        if (data.length < TrdpConstants.TRDP_HEADER_SIZE + TrdpConstants.TRDP_FCS_SIZE) {
+        if (data.length < TrdpConstants.TRDP_PD_HEADER_SIZE + TrdpConstants.TRDP_FCS_SIZE) {
             throw new IllegalArgumentException("Data too short for TRDP packet");
         }
         
-        TrdpHeader header = TrdpHeader.decode(data);
+        // Determine message type from the header to decide which header to decode
+        ByteBuffer buffer = ByteBuffer.wrap(data);
+        buffer.order(ByteOrder.BIG_ENDIAN);
+        int messageTypeCode = buffer.getShort(6) & 0xFFFF;
+        TrdpMessageType messageType = TrdpMessageType.fromCode(messageTypeCode);
+
+        TrdpHeader header;
+        int headerSize;
+
+        if (messageType.isMd()) {
+            header = TrdpMdHeader.decode(data);
+            headerSize = TrdpConstants.TRDP_MD_HEADER_SIZE;
+        } else {
+            header = TrdpPdHeader.decode(data);
+            headerSize = TrdpConstants.TRDP_PD_HEADER_SIZE;
+        }
         
         int payloadLength = header.getDatasetLength();
-        if (data.length < TrdpConstants.TRDP_HEADER_SIZE + payloadLength + TrdpConstants.TRDP_FCS_SIZE) {
+        if (data.length < headerSize + payloadLength + TrdpConstants.TRDP_FCS_SIZE) {
             throw new IllegalArgumentException("Data length mismatch");
         }
         
-        byte[] payload = Arrays.copyOfRange(data, TrdpConstants.TRDP_HEADER_SIZE, 
-                                            TrdpConstants.TRDP_HEADER_SIZE + payloadLength);
+        byte[] payload = Arrays.copyOfRange(data, headerSize, headerSize + payloadLength);
         
-        ByteBuffer buffer = ByteBuffer.wrap(data);
-        buffer.position(TrdpConstants.TRDP_HEADER_SIZE + payloadLength);
+        buffer.position(headerSize + payloadLength);
         int receivedDataFcs = buffer.getInt();
         
         int calculatedDataFcs = calculateDataFcs(payload);

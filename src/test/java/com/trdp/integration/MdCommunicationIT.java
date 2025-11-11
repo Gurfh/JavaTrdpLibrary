@@ -53,4 +53,32 @@ class MdCommunicationIT {
         assertThat(reply).isNotNull();
         assertThat(reply.getData()).isEqualTo(replyData);
     }
+
+    @Test
+    void testTcpRequestReply() throws Exception {
+        int comId = 2001;
+        int replierPort = 19101;
+        int requesterPort = 17226;
+
+        byte[] requestData = "Hello TCP TRDP MD".getBytes();
+        byte[] replyData = "Reply from TCP TRDP MD".getBytes();
+
+        replier = new MdReplier(replierPort, (receivedComId, data) -> {
+            assertThat(data).isEqualTo(requestData);
+            return replyData;
+        });
+        replier.start();
+
+        Thread.sleep(500);
+
+        requester = new MdRequester(requesterPort);
+
+        CompletableFuture<MdReply> future = requester.sendRequest(
+            comId, requestData, "127.0.0.1", replierPort, comId, com.trdp.md.TransportProtocol.TCP);
+
+        MdReply reply = future.get(5, TimeUnit.SECONDS);
+
+        assertThat(reply).isNotNull();
+        assertThat(reply.getData()).isEqualTo(replyData);
+    }
 }

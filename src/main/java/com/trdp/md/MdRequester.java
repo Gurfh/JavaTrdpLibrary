@@ -1,8 +1,10 @@
 package com.trdp.md;
 
+import com.trdp.network.TcpTransport;
 import com.trdp.network.UdpTransport;
 import com.trdp.protocol.TrdpConstants;
 import com.trdp.protocol.TrdpHeader;
+import com.trdp.protocol.TrdpMdHeader;
 import com.trdp.protocol.TrdpMessageType;
 import com.trdp.protocol.TrdpPacket;
 import org.slf4j.Logger;
@@ -19,33 +21,35 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class MdRequester implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(MdRequester.class);
     
-    private final UdpTransport transport;
+    private final UdpTransport udpTransport;
+    private final ConcurrentHashMap<String, TcpTransport> tcpConnections;
     private final AtomicInteger sequenceCounter;
     private final ConcurrentHashMap<Integer, CompletableFuture<MdReply>> pendingRequests;
     private volatile boolean running;
     private final CountDownLatch listenerReadyLatch = new CountDownLatch(1); // Add this latch
 
     public MdRequester(int localPort) throws IOException {
-        this.transport = new UdpTransport(localPort);
+        this.udpTransport = new UdpTransport(localPort);
+        this.tcpConnections = new ConcurrentHashMap<>();
         this.sequenceCounter = new AtomicInteger(0);
         this.pendingRequests = new ConcurrentHashMap<>();
         this.running = true;
         
-        startReplyListener();
+        startUdpReplyListener();
         
         // Add this block to wait for the listener thread to be ready
         try {
             if (!listenerReadyLatch.await(5, TimeUnit.SECONDS)) {
                 // Handle timeout: close transport and throw exception
                 running = false;
-                transport.close();
+                udpTransport.close();
                 throw new IOException("MD Requester listener thread failed to start in time.");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             // Handle interruption: close transport and throw exception
             running = false;
-            transport.close();
+            udpTransport.close();
             throw new IOException("Interrupted while waiting for listener to start", e);
         }
         
@@ -59,6 +63,12 @@ public class MdRequester implements AutoCloseable {
     
     public CompletableFuture<MdReply> sendRequest(int comId, byte[] data, 
                                                    String destinationAddress, int destinationPort, int replyComId) {
+        return sendRequest(comId, data, destinationAddress, destinationPort, replyComId, TransportProtocol.UDP);
+    }
+
+    public CompletableFuture<MdReply> sendRequest(int comId, byte[] data,
+                                                   String destinationAddress, int destinationPort,
+                                                   int replyComId, TransportProtocol protocol) {
         if (data.length > TrdpConstants.TRDP_MAX_MD_DATA_SIZE) {
             CompletableFuture<MdReply> future = new CompletableFuture<>();
             future.completeExceptionally(new IllegalArgumentException("Data size exceeds maximum MD data size"));
@@ -76,12 +86,10 @@ public class MdRequester implements AutoCloseable {
                          ((addrBytes[2] & 0xFF) << 8) |
                          (addrBytes[3] & 0xFF);
             
-            TrdpHeader header = new TrdpHeader();
+            TrdpMdHeader header = new TrdpMdHeader();
             header.setSequenceCounter(seqNo);
             header.setMessageType(TrdpMessageType.MD_REQUEST);
             header.setComId(comId);
-            header.setEtbTopoCnt(0);
-            header.setOpTrnTopoCnt(0);
             header.setReplyComId(replyComId);
             header.setReplyIpAddress(replyIp);
             
@@ -90,9 +98,24 @@ public class MdRequester implements AutoCloseable {
             
             pendingRequests.put(seqNo, future);
             
-            transport.send(encodedPacket, InetAddress.getByName(destinationAddress), destinationPort);
-            logger.debug("Sent MD request: ComID={}, SeqNo={}, ReplyComID={}, ReplyIP={}, Size={}", 
-                       comId, seqNo, replyComId, localAddress.getHostAddress(), data.length);
+            if (protocol == TransportProtocol.UDP) {
+                udpTransport.send(encodedPacket, InetAddress.getByName(destinationAddress), destinationPort);
+            } else {
+                String destination = destinationAddress + ":" + destinationPort;
+                TcpTransport tcpTransport = tcpConnections.computeIfAbsent(destination, key -> {
+                    try {
+                        TcpTransport newTransport = new TcpTransport(destinationAddress, destinationPort);
+                        startTcpReplyListener(newTransport);
+                        return newTransport;
+                    } catch (IOException e) {
+                        throw new RuntimeException("Failed to create TCP connection", e);
+                    }
+                });
+                tcpTransport.send(encodedPacket);
+            }
+
+            logger.debug("Sent MD request: ComID={}, SeqNo={}, ReplyComID={}, ReplyIP={}, Size={}, Protocol={}",
+                       comId, seqNo, replyComId, localAddress.getHostAddress(), data.length, protocol);
             
             future.orTimeout(TrdpConstants.DEFAULT_MD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                   .whenComplete((reply, ex) -> {
@@ -110,7 +133,7 @@ public class MdRequester implements AutoCloseable {
         return future;
     }
     
-    private void startReplyListener() {
+    private void startUdpReplyListener() {
         Thread listener = new Thread(() -> {
             byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
             
@@ -118,7 +141,7 @@ public class MdRequester implements AutoCloseable {
             
             while (running) {
                 try {
-                    int length = transport.receive(buffer, TrdpConstants.DEFAULT_MD_TIMEOUT_MS);
+                    int length = udpTransport.receive(buffer, TrdpConstants.DEFAULT_MD_TIMEOUT_MS);
                     if (length > 0) {
                         processReply(buffer, length);
                     }
@@ -129,6 +152,27 @@ public class MdRequester implements AutoCloseable {
                 }
             }
         }, "MD-Requester-Listener");
+        listener.setDaemon(true);
+        listener.start();
+    }
+
+    private void startTcpReplyListener(TcpTransport tcpTransport) {
+        Thread listener = new Thread(() -> {
+            byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
+
+            while (running && !tcpTransport.isClosed()) {
+                try {
+                    int length = tcpTransport.receive(buffer, TrdpConstants.DEFAULT_MD_TIMEOUT_MS);
+                    if (length > 0) {
+                        processReply(buffer, length);
+                    }
+                } catch (IOException e) {
+                    if (running) {
+                        logger.error("Error receiving TCP MD reply", e);
+                    }
+                }
+            }
+        });
         listener.setDaemon(true);
         listener.start();
     }
@@ -162,7 +206,17 @@ public class MdRequester implements AutoCloseable {
         running = false;
         pendingRequests.values().forEach(f -> f.cancel(true));
         pendingRequests.clear();
-        transport.close();
+
+        tcpConnections.values().forEach(transport -> {
+            try {
+                transport.close();
+            } catch (IOException e) {
+                logger.error("Error closing TCP transport", e);
+            }
+        });
+        tcpConnections.clear();
+
+        udpTransport.close();
         logger.info("MD Requester closed");
     }
 }

@@ -7,7 +7,7 @@ class TrdpPacketTest {
     
     @Test
     void testEncodeAndDecode() {
-        TrdpHeader header = new TrdpHeader();
+        TrdpMdHeader header = new TrdpMdHeader();
         header.setSequenceCounter(10);
         header.setMessageType(TrdpMessageType.MD_REQUEST);
         header.setComId(500);
@@ -27,7 +27,7 @@ class TrdpPacketTest {
     
     @Test
     void testEmptyPayload() {
-        TrdpHeader header = new TrdpHeader();
+        TrdpHeader header = new TrdpPdHeader();
         header.setSequenceCounter(1);
         header.setMessageType(TrdpMessageType.PD);
         header.setComId(100);
@@ -42,7 +42,7 @@ class TrdpPacketTest {
     
     @Test
     void testNullPayload() {
-        TrdpHeader header = new TrdpHeader();
+        TrdpHeader header = new TrdpPdHeader();
         header.setSequenceCounter(1);
         header.setMessageType(TrdpMessageType.PD);
         header.setComId(100);
@@ -57,7 +57,7 @@ class TrdpPacketTest {
     
     @Test
     void testDataFcsValidation() {
-        TrdpHeader header = new TrdpHeader();
+        TrdpHeader header = new TrdpPdHeader();
         header.setSequenceCounter(1);
         header.setMessageType(TrdpMessageType.PD);
         header.setComId(100);

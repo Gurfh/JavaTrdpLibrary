@@ -3,11 +3,11 @@ package com.trdp.protocol;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.*;
 
-class TrdpHeaderTest {
+class TrdpPdHeaderTest {
     
     @Test
     void testEncodeAndDecode() {
-        TrdpHeader original = new TrdpHeader();
+        TrdpPdHeader original = new TrdpPdHeader();
         original.setSequenceCounter(42);
         original.setMessageType(TrdpMessageType.PD);
         original.setComId(1000);
@@ -18,9 +18,9 @@ class TrdpHeaderTest {
         original.setReplyIpAddress(0xC0A80001);
         
         byte[] encoded = original.encode();
-        assertThat(encoded).hasSize(TrdpConstants.TRDP_HEADER_SIZE);
+        assertThat(encoded).hasSize(TrdpConstants.TRDP_PD_HEADER_SIZE);
         
-        TrdpHeader decoded = TrdpHeader.decode(encoded);
+        TrdpPdHeader decoded = TrdpPdHeader.decode(encoded);
         
         assertThat(decoded.getSequenceCounter()).isEqualTo(42);
         assertThat(decoded.getMessageType()).isEqualTo(TrdpMessageType.PD);
@@ -36,23 +36,23 @@ class TrdpHeaderTest {
     void testInvalidHeaderSize() {
         byte[] tooShort = new byte[10];
         
-        assertThatThrownBy(() -> TrdpHeader.decode(tooShort))
+        assertThatThrownBy(() -> TrdpPdHeader.decode(tooShort))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("too short");
     }
     
     @Test
     void testFcsValidation() {
-        TrdpHeader header = new TrdpHeader();
+        TrdpPdHeader header = new TrdpPdHeader();
         header.setSequenceCounter(1);
         header.setMessageType(TrdpMessageType.PD);
         header.setComId(100);
         
         byte[] encoded = header.encode();
         
-        encoded[TrdpConstants.TRDP_HEADER_SIZE - 1] ^= 0xFF;
+        encoded[TrdpConstants.TRDP_PD_HEADER_SIZE - 1] ^= 0xFF;
         
-        assertThatThrownBy(() -> TrdpHeader.decode(encoded))
+        assertThatThrownBy(() -> TrdpPdHeader.decode(encoded))
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("FCS mismatch");
     }

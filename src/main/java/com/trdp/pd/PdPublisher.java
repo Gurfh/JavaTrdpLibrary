@@ -3,6 +3,7 @@ package com.trdp.pd;
 import com.trdp.network.UdpTransport;
 import com.trdp.protocol.TrdpConstants;
 import com.trdp.protocol.TrdpHeader;
+import com.trdp.protocol.TrdpPdHeader;
 import com.trdp.protocol.TrdpMessageType;
 import com.trdp.protocol.TrdpPacket;
 import org.slf4j.Logger;
@@ -36,12 +37,12 @@ public class PdPublisher implements AutoCloseable {
             throw new IllegalArgumentException("Data size exceeds maximum PD data size");
         }
         
-        TrdpHeader header = new TrdpHeader();
+        TrdpHeader header = new TrdpPdHeader();
         header.setSequenceCounter(sequenceCounter.getAndIncrement());
         header.setMessageType(TrdpMessageType.PD);
         header.setComId(comId);
-        header.setEtbTopoCnt(0);
-        header.setOpTrnTopoCnt(0);
+        ((TrdpPdHeader) header).setEtbTopoCnt(0);
+        ((TrdpPdHeader) header).setOpTrnTopoCnt(0);
         
         TrdpPacket packet = new TrdpPacket(header, data);
         byte[] encodedPacket = packet.encode();

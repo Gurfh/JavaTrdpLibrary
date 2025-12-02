@@ -63,7 +63,7 @@ This library is hosted on **JitPack**. To use it, you need to add the JitPack re
 
 **2. Add the dependency:**
 
-For a stable release (e.g., based on a Git tag like `v1.0.10`):
+For a stable release (e.g., based on a Git tag like `v1.0.1`):
 ```xml
  <dependency>
      <groupId>com.github.Gurfh</groupId>

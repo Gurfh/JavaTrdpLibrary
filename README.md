@@ -66,9 +66,9 @@ This library is hosted on **JitPack**. To use it, you need to add the JitPack re
 For a stable release (e.g., based on a Git tag like `v1.0.0`):
 ```xml
  <dependency>
-     <groupId>com.trdp</groupId>
-     <artifactId>trdp-protocol</artifactId>
-    <version>v1.0.0</version>
+     <groupId>com.github.Gurfh</groupId>
+     <artifactId>JavaTrdpLibrary</artifactId>
+    <version>v1.0.1</version>
  </dependency>
 ```
 

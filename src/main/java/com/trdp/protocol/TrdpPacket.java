@@ -15,21 +15,31 @@ public class TrdpPacket {
         this.header.setDatasetLength(this.payload.length);
     }
     
-    public byte[] encode() {
-        byte[] headerBytes = header.encode();
-        int totalSize = headerBytes.length + payload.length + TrdpConstants.TRDP_FCS_SIZE;
-        
-        ByteBuffer buffer = ByteBuffer.allocate(totalSize);
-        buffer.order(ByteOrder.BIG_ENDIAN);
-        
-        buffer.put(headerBytes);
-        buffer.put(payload);
-        
-        this.dataFcs = calculateDataFcs(payload);
-        buffer.putInt(dataFcs);
-        
-        return buffer.array();
+public byte[] encode() {
+    byte[] headerBytes = header.encode();
+    
+    // Calculate required padding to reach 4-byte boundary
+    int padding = (4 - (payload.length % 4)) % 4;
+    
+    // Include padding in total size
+    int totalSize = headerBytes.length + payload.length + padding + TrdpConstants.TRDP_FCS_SIZE;
+    
+    ByteBuffer buffer = ByteBuffer.allocate(totalSize);
+    buffer.order(ByteOrder.BIG_ENDIAN);
+    
+    buffer.put(headerBytes);
+    buffer.put(payload);
+    
+    // Write zero-padding
+    for (int i = 0; i < padding; i++) {
+        buffer.put((byte) 0);
     }
+    
+    this.dataFcs = calculateDataFcs(payload);
+    buffer.putInt(dataFcs);
+    
+    return buffer.array();
+}
     
     public static TrdpPacket decode(byte[] data) {
         if (data.length < TrdpConstants.TRDP_PD_HEADER_SIZE + TrdpConstants.TRDP_FCS_SIZE) {

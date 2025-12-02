@@ -15,38 +15,45 @@ public class TrdpPacket {
         this.header.setDatasetLength(this.payload.length);
     }
     
-public byte[] encode() {
-    byte[] headerBytes = header.encode();
-    
-    // Calculate required padding to reach 4-byte boundary
-    int padding = (4 - (payload.length % 4)) % 4;
-    
-    // Include padding in total size
-    int totalSize = headerBytes.length + payload.length + padding + TrdpConstants.TRDP_FCS_SIZE;
-    
-    ByteBuffer buffer = ByteBuffer.allocate(totalSize);
-    buffer.order(ByteOrder.BIG_ENDIAN);
-    
-    buffer.put(headerBytes);
-    buffer.put(payload);
-    
-    // Write zero-padding
-    for (int i = 0; i < padding; i++) {
-        buffer.put((byte) 0);
+    public byte[] encode() {
+        byte[] headerBytes = header.encode();
+        
+        // 1. Calculate required padding
+        int padding = (4 - (payload.length % 4)) % 4;
+        
+        // 2. Prepare data for FCS calculation (Payload + Padding)
+        byte[] dataToCrc = new byte[payload.length + padding];
+        System.arraycopy(payload, 0, dataToCrc, 0, payload.length);
+        // Padding bytes in dataToCrc are already 0
+        
+        // 3. Calculate FCS over Payload + Padding
+        this.dataFcs = calculateDataFcs(dataToCrc);
+        
+        int totalSize = headerBytes.length + payload.length + padding + TrdpConstants.TRDP_FCS_SIZE;
+        
+        ByteBuffer buffer = ByteBuffer.allocate(totalSize);
+        buffer.order(ByteOrder.BIG_ENDIAN);
+        
+        buffer.put(headerBytes);
+        buffer.put(payload);
+        
+        // 4. Write Padding
+        for (int i = 0; i < padding; i++) {
+            buffer.put((byte) 0);
+        }
+        
+        // 5. Write FCS in Little Endian (Standard compliance)
+        buffer.order(ByteOrder.LITTLE_ENDIAN);
+        buffer.putInt(dataFcs);
+        
+        return buffer.array();
     }
-    
-    this.dataFcs = calculateDataFcs(payload);
-    buffer.putInt(dataFcs);
-    
-    return buffer.array();
-}
     
     public static TrdpPacket decode(byte[] data) {
         if (data.length < TrdpConstants.TRDP_PD_HEADER_SIZE + TrdpConstants.TRDP_FCS_SIZE) {
             throw new IllegalArgumentException("Data too short for TRDP packet");
         }
         
-        // Determine message type from the header to decide which header to decode
         ByteBuffer buffer = ByteBuffer.wrap(data);
         buffer.order(ByteOrder.BIG_ENDIAN);
         int messageTypeCode = buffer.getShort(6) & 0xFFFF;
@@ -64,16 +71,29 @@ public byte[] encode() {
         }
         
         int payloadLength = header.getDatasetLength();
-        if (data.length < headerSize + payloadLength + TrdpConstants.TRDP_FCS_SIZE) {
+        
+        // 1. Calculate Padding to skip
+        int padding = (4 - (payloadLength % 4)) % 4;
+        
+        if (data.length < headerSize + payloadLength + padding + TrdpConstants.TRDP_FCS_SIZE) {
             throw new IllegalArgumentException("Data length mismatch");
         }
         
         byte[] payload = Arrays.copyOfRange(data, headerSize, headerSize + payloadLength);
         
-        buffer.position(headerSize + payloadLength);
+        // 2. Position buffer after Payload AND Padding
+        buffer.position(headerSize + payloadLength + padding);
+        
+        // 3. Read FCS in Little Endian
+        buffer.order(ByteOrder.LITTLE_ENDIAN);
         int receivedDataFcs = buffer.getInt();
         
-        int calculatedDataFcs = calculateDataFcs(payload);
+        // 4. Calculate Expected FCS (Payload + Padding)
+        byte[] dataToCrc = new byte[payload.length + padding];
+        System.arraycopy(payload, 0, dataToCrc, 0, payload.length);
+        
+        int calculatedDataFcs = calculateDataFcs(dataToCrc);
+        
         if (calculatedDataFcs != receivedDataFcs) {
             throw new IllegalStateException("Data FCS mismatch");
         }

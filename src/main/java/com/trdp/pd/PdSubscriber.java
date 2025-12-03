@@ -23,9 +23,9 @@ public class PdSubscriber implements AutoCloseable {
     private final ExecutorService executor;
     private volatile boolean running;
     
-    public PdSubscriber(int comId, String multicastGroup, int port) throws IOException {
+    public PdSubscriber(int comId, String address, int port) throws IOException {
         this.comId = comId;
-        this.transport = new UdpTransport(port);
+        this.transport = new UdpTransport(port); // Binds to 0.0.0.0:port (listens on all interfaces)
         this.listeners = new CopyOnWriteArrayList<>();
         this.executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "PD-Subscriber-" + comId);
@@ -33,8 +33,15 @@ public class PdSubscriber implements AutoCloseable {
             return t;
         });
         
-        transport.joinMulticastGroup(InetAddress.getByName(multicastGroup));
-        logger.info("PD Subscriber created for ComID {} on {}:{}", comId, multicastGroup, port);
+        InetAddress inetAddress = InetAddress.getByName(address);
+        
+        // Only join if it is actually a multicast address
+        if (inetAddress.isMulticastAddress()) {
+            transport.joinMulticastGroup(inetAddress);
+            logger.info("PD Subscriber joined multicast group {} on port {}", address, port);
+        } else {
+            logger.info("PD Subscriber listening for Unicast on port {} (Address arg '{}' ignored for binding)", port, address);
+        }
     }
     
     public void start() {

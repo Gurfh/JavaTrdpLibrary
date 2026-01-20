@@ -478,12 +478,3 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 For issues, questions, or contributions:
 - GitHub Issues: https://github.com/Gurfh/JavaTrdpLibrary/issues
-
-## Changelog
-
-### Version 1.0.0 (Initial Release)
-- Complete TRDP protocol implementation
-- Process Data (PD) publisher/subscriber support
-- Message Data (MD) request/reply support
-- Comprehensive test coverage
-- Production-ready reliability features

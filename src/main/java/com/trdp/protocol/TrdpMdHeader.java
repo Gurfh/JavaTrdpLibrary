@@ -29,9 +29,7 @@ public class TrdpMdHeader extends TrdpPdHeader {
         buffer.putInt(getOpTrnTopoCnt());
         
         buffer.putInt(getDatasetLength());
-        buffer.putInt(getReplyComId());
-        buffer.putInt(getReplyIpAddress());
-
+        
         buffer.putInt(replyStatus);
         buffer.put(sessionId);
         buffer.putInt(replyTimeout);
@@ -69,9 +67,7 @@ public class TrdpMdHeader extends TrdpPdHeader {
         header.setOpTrnTopoCnt(buffer.getInt());
         
         header.setDatasetLength(buffer.getInt());
-        header.setReplyComId(buffer.getInt());
-        header.setReplyIpAddress(buffer.getInt());
-
+        
         header.replyStatus = buffer.getInt();
         buffer.get(header.sessionId);
         header.replyTimeout = buffer.getInt();

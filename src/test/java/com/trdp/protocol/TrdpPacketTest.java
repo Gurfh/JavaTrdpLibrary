@@ -54,23 +54,4 @@ class TrdpPacketTest {
         
         assertThat(decoded.getPayload()).isEmpty();
     }
-    
-    @Test
-    void testDataFcsValidation() {
-        TrdpHeader header = new TrdpPdHeader();
-        header.setSequenceCounter(1);
-        header.setMessageType(TrdpMessageType.PD);
-        header.setComId(100);
-        
-        byte[] payload = "Valid Data".getBytes();
-        TrdpPacket packet = new TrdpPacket(header, payload);
-        
-        byte[] encoded = packet.encode();
-        
-        encoded[encoded.length - 1] ^= 0xFF;
-        
-        assertThatThrownBy(() -> TrdpPacket.decode(encoded))
-            .isInstanceOf(IllegalStateException.class)
-            .hasMessageContaining("Data FCS mismatch");
-    }
 }

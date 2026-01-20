@@ -24,6 +24,10 @@ public class TrdpMdHeader extends TrdpPdHeader {
         buffer.putShort((short) getProtocolVersion());
         buffer.putShort((short) getMessageType().getCode());
         buffer.putInt(getComId());
+        
+        buffer.putInt(getEtbTopoCnt());
+        buffer.putInt(getOpTrnTopoCnt());
+        
         buffer.putInt(getDatasetLength());
         buffer.putInt(getReplyComId());
         buffer.putInt(getReplyIpAddress());
@@ -60,6 +64,10 @@ public class TrdpMdHeader extends TrdpPdHeader {
         header.setProtocolVersion(buffer.getShort() & 0xFFFF);
         header.setMessageType(TrdpMessageType.fromCode(buffer.getShort() & 0xFFFF));
         header.setComId(buffer.getInt());
+        
+        header.setEtbTopoCnt(buffer.getInt());
+        header.setOpTrnTopoCnt(buffer.getInt());
+        
         header.setDatasetLength(buffer.getInt());
         header.setReplyComId(buffer.getInt());
         header.setReplyIpAddress(buffer.getInt());

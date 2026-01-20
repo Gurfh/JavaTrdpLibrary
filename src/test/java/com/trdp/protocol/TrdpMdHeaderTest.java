@@ -35,6 +35,7 @@ class TrdpMdHeaderTest {
     @Test
     void testHeaderSize() {
         TrdpMdHeader header = new TrdpMdHeader();
+        header.setMessageType(TrdpMessageType.MD_REQUEST);
         byte[] encoded = header.encode();
         assertThat(encoded.length).isEqualTo(TrdpConstants.TRDP_MD_HEADER_SIZE);
         assertThat(encoded.length).isEqualTo(116);

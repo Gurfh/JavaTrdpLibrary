@@ -3,7 +3,7 @@ package com.trdp.protocol;
 public final class TrdpConstants {
     
     public static final int TRDP_PD_HEADER_SIZE = 40;
-    public static final int TRDP_MD_HEADER_SIZE = 116;
+    public static final int TRDP_MD_HEADER_SIZE = 124;
     public static final int TRDP_FCS_SIZE = 4;
     public static final int TRDP_MAX_PD_DATA_SIZE = 1432;
     public static final int TRDP_MAX_PACKET_SIZE = TRDP_PD_HEADER_SIZE + TRDP_MAX_PD_DATA_SIZE;

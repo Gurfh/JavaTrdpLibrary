@@ -36,6 +36,8 @@ class TrdpMdHeaderTest {
     @Test
     void testSessionIdHandling() {
         TrdpMdHeader header = new TrdpMdHeader();
+        header.setMessageType(TrdpMessageType.MD_REQUEST); 
+        
         UUID uuid = UUID.randomUUID();
         
         header.setSessionId(uuid);
@@ -50,6 +52,8 @@ class TrdpMdHeaderTest {
     @Test
     void testUriHandling() {
         TrdpMdHeader header = new TrdpMdHeader();
+        header.setMessageType(TrdpMessageType.MD_REQUEST);
+        
         String source = "train.cst.app1";
         String dest = "train.vcu.manager";
         
@@ -66,6 +70,8 @@ class TrdpMdHeaderTest {
     @Test
     void testUriTruncation() {
         TrdpMdHeader header = new TrdpMdHeader();
+        header.setMessageType(TrdpMessageType.MD_REQUEST);
+        
         String longUri = "this.is.a.very.long.uri.that.exceeds.thirty.two.bytes";
         
         header.setSourceUri(longUri);

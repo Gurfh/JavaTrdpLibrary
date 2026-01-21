@@ -63,12 +63,12 @@ This library is hosted on **JitPack**. To use it, you need to add the JitPack re
 
 **2. Add the dependency:**
 
-For a stable release (e.g., based on a Git tag like `v1.0.1`):
+For a stable release (e.g., based on a Git tag like `v1.0.0`):
 ```xml
  <dependency>
      <groupId>com.github.Gurfh</groupId>
      <artifactId>JavaTrdpLibrary</artifactId>
-    <version>v1.0.1</version>
+    <version>1.0.0</version>
  </dependency>
 ```
 
@@ -143,7 +143,6 @@ try (MdRequester requester = new MdRequester(17225)) {
         "TCP Request".getBytes(),
         "192.168.1.100",
         17226,
-        2001,
         TransportProtocol.TCP
     );
 
@@ -157,12 +156,13 @@ try (MdRequester requester = new MdRequester(17225)) {
 ```java
 import com.trdp.md.MdReplier;
 import com.trdp.md.MdRequestHandler;
+import com.trdp.md.MdResponse;
 
 // Create a request handler
-MdRequestHandler handler = (comId, requestData) -> {
-    System.out.println("Received request for ComID " + comId);
+MdRequestHandler handler = (request) -> {
+    System.out.println("Received request for ComID " + request.getComId());
     // Process the request and return reply data
-    return "Reply Data".getBytes();
+    return new MdResponse("Reply Data".getBytes());
 };
 
 // Create a replier
@@ -377,7 +377,7 @@ com.trdp
 
 ```bash
 # Clone the repository
-git clone https://github.com/Gurfh/JavaTrdpLibrary
+git clone [https://github.com/Gurfh/JavaTrdpLibrary](https://github.com/Gurfh/JavaTrdpLibrary)
 cd JavaTrdpLibrary
 
 # Build the project

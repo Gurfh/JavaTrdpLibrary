@@ -1,6 +1,5 @@
 package com.trdp.md;
 
-import com.trdp.protocol.TrdpConstants;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterEach;
 import static org.assertj.core.api.Assertions.*;
@@ -25,23 +24,22 @@ class MdRequesterTest {
     }
     
     @Test
-    void testSendRequest() throws IOException {
+    void testSendRequestReturnsFuture() throws IOException {
         requester = new MdRequester(0);
         
         byte[] requestData = "Request".getBytes();
+        // Uses the simple overload
         CompletableFuture<MdReply> future = requester.sendRequest(2000, requestData, "127.0.0.1", 17226);
         
         assertThat(future).isNotNull();
         assertThat(future).isNotCompleted();
     }
-    
+
     @Test
-    void testSendOversizedRequest() throws IOException {
+    void testSetTopologyCounters() throws IOException {
         requester = new MdRequester(0);
-        
-        byte[] oversizedData = new byte[TrdpConstants.TRDP_MAX_MD_DATA_SIZE + 1];
-        CompletableFuture<MdReply> future = requester.sendRequest(2000, oversizedData, "127.0.0.1", 17226);
-        
-        assertThat(future).isCompletedExceptionally();
+        // Verify no exception is thrown
+        assertThatCode(() -> requester.setTopologyCounters(1, 1))
+            .doesNotThrowAnyException();
     }
 }

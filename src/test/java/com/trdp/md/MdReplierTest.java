@@ -18,14 +18,14 @@ class MdReplierTest {
     
     @Test
     void testCreateReplier() throws IOException {
-        MdRequestHandler handler = (comId, data) -> "Reply".getBytes();
+        MdRequestHandler handler = (request) -> new MdResponse("Reply".getBytes());
         replier = new MdReplier(17227, handler);
         assertThat(replier).isNotNull();
     }
     
     @Test
     void testStartReplier() throws IOException {
-        MdRequestHandler handler = (comId, data) -> "Reply".getBytes();
+        MdRequestHandler handler = (request) -> new MdResponse("Reply".getBytes());
         replier = new MdReplier(17228, handler);
         
         assertThatCode(() -> replier.start()).doesNotThrowAnyException();

@@ -3,6 +3,8 @@ package com.trdp.protocol;
 import com.trdp.util.FcsUtils;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 public class TrdpMdHeader extends TrdpPdHeader {
     private int replyStatus;
@@ -74,6 +76,82 @@ public class TrdpMdHeader extends TrdpPdHeader {
         buffer.get(header.sourceUri);
         buffer.get(header.destinationUri);
 
+        // Validate FCS
+        buffer.order(ByteOrder.LITTLE_ENDIAN);
+        int receivedFcs = buffer.getInt();
+        int calculatedFcs = FcsUtils.calculateFcs(data, 0, TrdpConstants.TRDP_MD_HEADER_SIZE - 4);
+        
+        if (receivedFcs != calculatedFcs) {
+             throw new IllegalStateException("MD Header FCS mismatch");
+        }
+
         return header;
+    }
+
+    // --- Session ID Handling (UUID) ---
+
+    public void setSessionId(UUID uuid) {
+        ByteBuffer bb = ByteBuffer.wrap(this.sessionId);
+        bb.putLong(uuid.getMostSignificantBits());
+        bb.putLong(uuid.getLeastSignificantBits());
+    }
+
+    public void setSessionId(byte[] bytes) {
+        if (bytes.length != 16) throw new IllegalArgumentException("Session ID must be 16 bytes");
+        System.arraycopy(bytes, 0, this.sessionId, 0, 16);
+    }
+
+    public UUID getSessionIdAsUuid() {
+        ByteBuffer bb = ByteBuffer.wrap(this.sessionId);
+        long high = bb.getLong();
+        long low = bb.getLong();
+        return new UUID(high, low);
+    }
+
+    public byte[] getSessionId() {
+        return sessionId;
+    }
+
+    // --- URI Handling ---
+
+    public void setSourceUri(String uri) {
+        this.sourceUri = stringToBytes(uri, 32);
+    }
+
+    public String getSourceUriString() {
+        return bytesToString(this.sourceUri);
+    }
+
+    public void setDestinationUri(String uri) {
+        this.destinationUri = stringToBytes(uri, 32);
+    }
+
+    public String getDestinationUriString() {
+        return bytesToString(this.destinationUri);
+    }
+
+    // --- Getters/Setters for other fields ---
+
+    public int getReplyStatus() { return replyStatus; }
+    public void setReplyStatus(int replyStatus) { this.replyStatus = replyStatus; }
+
+    public int getReplyTimeout() { return replyTimeout; }
+    public void setReplyTimeout(int replyTimeout) { this.replyTimeout = replyTimeout; }
+
+    // --- Helpers ---
+
+    private byte[] stringToBytes(String s, int length) {
+        byte[] b = new byte[length]; // initialized to 0
+        if (s != null) {
+            byte[] strBytes = s.getBytes(StandardCharsets.UTF_8);
+            System.arraycopy(strBytes, 0, b, 0, Math.min(strBytes.length, length));
+        }
+        return b;
+    }
+
+    private String bytesToString(byte[] b) {
+        int len = 0;
+        while (len < b.length && b[len] != 0) len++;
+        return new String(b, 0, len, StandardCharsets.UTF_8);
     }
 }

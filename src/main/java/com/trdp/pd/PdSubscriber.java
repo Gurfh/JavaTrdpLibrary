@@ -78,9 +78,12 @@ public class PdSubscriber implements AutoCloseable {
             System.arraycopy(buffer, 0, packetData, 0, length);
             
             TrdpPacket packet = TrdpPacket.decode(packetData);
-            
-            if (packet.getHeader().getMessageType() != TrdpMessageType.PD) {
-                logger.warn("Received non-PD message, ignoring");
+            TrdpMessageType type = packet.getHeader().getMessageType();
+
+            // Updated Filter: Accept both PD (Push) and PD_REPLY (Pull)
+            if (type != TrdpMessageType.PD && type != TrdpMessageType.PD_REPLY) {
+                // Debug log instead of warn to reduce noise if sharing ports with MD
+                logger.debug("Received message type {}, ignoring in PD Subscriber", type);
                 return;
             }
             

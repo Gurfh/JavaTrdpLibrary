@@ -8,7 +8,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
 ## Features
 
 - **Complete TRDP Protocol Implementation**
-  - Process Data (PD) for cyclic data exchange
+  - Process Data (PD) for cyclic data exchange and pull patterns
   - Message Data (MD) for request/reply communication
   - Full compliance with IEC 61375-2-3 specification
   - CRC32 checksums per IEEE 802.3
@@ -21,7 +21,8 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - TIMEDATE timestamp support
 
 - **Process Data (PD) Support**
-  - Publisher/Subscriber pattern
+  - Publisher/Subscriber pattern (Push)
+  - Requester/Replier pattern (Pull)
   - UDP multicast and unicast communication
   - Automatic sequence numbering
   - Configurable ComIDs and timeouts
@@ -74,7 +75,7 @@ For a stable release (e.g., based on a Git tag like `v1.0.0`):
 
 ## Usage
 
-### Process Data (PD) - Publisher/Subscriber
+### Process Data (PD) - Publisher/Subscriber (Push)
 
 #### Creating a Publisher
 
@@ -110,6 +111,80 @@ try (PdSubscriber subscriber = new PdSubscriber(1000, "239.255.0.1", 17224)) {
     // Keep running to receive data
     Thread.sleep(60000);
 }
+
+```
+
+### Process Data (PD) - Pull Pattern
+
+The library supports the PD Pull pattern where a `Requester` solicits data from a `Publisher` (acting as a Replier), which then sends a `PD_REPLY` to a `Subscriber`.
+
+#### Configuring a Publisher for Pull
+
+To support Pull requests, the Publisher must be initialized with a listening port.
+
+```java
+import com.trdp.pd.PdPublisher;
+
+// Create a publisher that listens for requests on port 17224
+// It can serve both Push (to multicast) and Pull (request/reply) simultaneously
+try (PdPublisher publisher = new PdPublisher(1000, "239.255.0.1", 17224, 17224)) {
+    // Update the internal data buffer without sending a Push message
+    // This data will be sent in the Reply when a Request is received
+    publisher.putData("Pull me!".getBytes());
+    
+    // Start the request listener
+    publisher.start();
+    
+    // Keep alive
+    Thread.sleep(60000);
+}
+
+```
+
+#### Requesting Data (Unicast)
+
+The simplest way to pull data is using the `PdSubscriber` to send the request. This ensures the unicast reply is routed back to the subscriber's socket.
+
+```java
+import com.trdp.pd.PdSubscriber;
+
+try (PdSubscriber subscriber = new PdSubscriber(1000, "0.0.0.0", 17224)) {
+    subscriber.addListener((comId, data, seq) -> {
+        System.out.println("Received Pull Reply: " + new String(data));
+    });
+    subscriber.start();
+
+    // Send a Pull Request to the Publisher at 192.168.1.50
+    subscriber.request(
+        1000,              // ComID to request
+        "192.168.1.50",    // Publisher IP
+        17224,             // Publisher Port
+        0,                 // Reply ComID (0 = use requested ComID)
+        null               // Reply IP (null = unicast back to source)
+    );
+}
+
+```
+
+#### Requesting Data (Multicast / Separate Requester)
+
+You can also use a standalone `PdRequester` to solicit data, for example, asking a Publisher to send the reply to a Multicast group.
+
+```java
+import com.trdp.pd.PdRequester;
+
+try (PdRequester requester = new PdRequester(0)) { // 0 = ephemeral port
+    // Request ComID 1000 from Publisher at 192.168.1.50
+    // Ask Publisher to send reply to Multicast Group 239.255.0.1
+    requester.request(
+        1000,               // ComID
+        "192.168.1.50",     // Publisher IP
+        17224,              // Publisher Port
+        0,                  // Reply ComID
+        "239.255.0.1"       // Reply to this Multicast Group
+    );
+}
+
 ```
 
 ### Message Data (MD) - Request/Reply
@@ -357,6 +432,7 @@ com.trdp
 ├── pd               # Process Data components
 │   ├── PdPublisher     # PD publisher implementation
 │   ├── PdSubscriber    # PD subscriber implementation
+│   ├── PdRequester     # PD requester implementation
 │   └── PdDataListener  # Data listener interface
 ├── md               # Message Data components
 │   ├── MdRequester     # MD requester implementation

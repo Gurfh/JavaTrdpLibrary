@@ -51,22 +51,21 @@ class PdPullPatternIT {
         });
         subscriber.start();
         
-        // 3. Setup Requester (Binding to the SAME port as Subscriber so the reply goes to the Subscriber)
-        // This relies on SO_REUSEADDR which is enabled in UdpTransport
+        // 3. Setup Requester (Binding to the SAME port as Subscriber)
+        // For Multicast reply destinations, sending from the same port works on most OSs 
+        // because the reply is multicast to the group, not unicast to the socket.
         requester = new PdRequester(sharedPort);
         
         // Allow sockets to bind
         Thread.sleep(100);
         
-        // 4. Send Request
-        // Requesting reply to the Multicast Group. 
-        // The Publisher sees source port = sharedPort, so it sends to multicastGroup:sharedPort
+        // 4. Send Request asking for reply to Multicast Group
         requester.request(comId, "127.0.0.1", publisherListenPort, 0, multicastGroup);
         
         // 5. Verify Reception
         boolean received = latch.await(2, TimeUnit.SECONDS);
         
-        assertThat(received).as("Subscriber should receive the pulled data").isTrue();
+        assertThat(received).as("Subscriber should receive the pulled data via multicast").isTrue();
         assertThat(receivedData.get()).isEqualTo(expectedData);
     }
     
@@ -95,18 +94,17 @@ class PdPullPatternIT {
         });
         subscriber.start();
         
-        // 3. Setup Requester (Same port)
-        requester = new PdRequester(requesterPort);
-        
         Thread.sleep(100);
         
-        // 4. Send Request (No specific reply IP, defaults to source IP/Port)
-        requester.request(comId, "127.0.0.1", publisherListenPort, 0, null);
+        // 3. Send Request USING THE SUBSCRIBER
+        // This ensures the request source port matches the subscriber port, 
+        // so the publisher's unicast reply comes back to this specific socket.
+        subscriber.request(comId, "127.0.0.1", publisherListenPort, 0, null);
         
-        // 5. Verify Reception
+        // 4. Verify Reception
         boolean received = latch.await(2, TimeUnit.SECONDS);
         
-        assertThat(received).isTrue();
+        assertThat(received).as("Subscriber should receive the pulled data via unicast").isTrue();
         assertThat(receivedData.get()).isEqualTo(expectedData);
     }
 }

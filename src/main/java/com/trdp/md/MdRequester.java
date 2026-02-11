@@ -11,8 +11,11 @@ import com.trdp.protocol.TrdpPacket;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.DataInputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.net.SocketTimeoutException;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -175,19 +178,52 @@ public class MdRequester implements AutoCloseable {
 
     private void startTcpReplyListener(TcpTransport tcpTransport) {
         Thread listener = new Thread(() -> {
-            byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
-            while (running && !tcpTransport.isClosed()) {
-                try {
-                    int length = tcpTransport.receive(buffer, TrdpConstants.DEFAULT_MD_TIMEOUT_MS);
-                    if (length > 0) {
-                        // TCP handling might need to know remote address for context, but for reply matching SessionID is sufficient
-                        processReplyPacket(buffer, length, null, 0); 
+            try {
+                tcpTransport.setSoTimeout(TrdpConstants.DEFAULT_MD_TIMEOUT_MS);
+                DataInputStream in = new DataInputStream(tcpTransport.getInputStream());
+
+                while (running && !tcpTransport.isClosed()) {
+                    try {
+                        // 1. Read MD header (fixed size) to determine payload length
+                        byte[] headerBytes = new byte[TrdpConstants.TRDP_MD_HEADER_SIZE];
+                        in.readFully(headerBytes);
+
+                        // 2. Decode header to get payload length
+                        TrdpMdHeader header;
+                        try {
+                            header = TrdpMdHeader.decode(headerBytes);
+                        } catch (Exception e) {
+                            logger.warn("Invalid TRDP header on TCP reply stream: {}", e.getMessage());
+                            break; // Stream sync lost
+                        }
+
+                        // 3. Read payload if present
+                        int datasetLen = header.getDatasetLength();
+                        byte[] payload = new byte[0];
+                        if (datasetLen > 0) {
+                            if (datasetLen > TrdpConstants.TRDP_MAX_MD_DATA_SIZE) {
+                                logger.warn("Oversized payload declared in TCP reply: {}", datasetLen);
+                                break;
+                            }
+                            payload = new byte[datasetLen];
+                            in.readFully(payload);
+                        }
+
+                        // 4. Reconstruct packet and process
+                        TrdpPacket packet = new TrdpPacket(header, payload);
+                        byte[] encoded = packet.encode();
+                        processReplyPacket(encoded, encoded.length, null, 0);
+
+                    } catch (SocketTimeoutException e) {
+                        // Timeout is normal, loop back to check running flag
+                    } catch (EOFException e) {
+                        break; // Connection closed by peer
                     }
-                } catch (IOException e) {
-                    if (running) logger.error("Error receiving TCP MD reply", e);
                 }
+            } catch (IOException e) {
+                if (running) logger.error("Error in TCP reply listener", e);
             }
-        });
+        }, "MD-Requester-TCP-Listener");
         listener.setDaemon(true);
         listener.start();
     }

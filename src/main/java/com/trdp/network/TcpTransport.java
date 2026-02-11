@@ -46,6 +46,20 @@ public class TcpTransport implements AutoCloseable {
         }
     }
 
+    public InputStream getInputStream() throws IOException {
+        if (socket == null || socket.isClosed()) {
+            throw new IOException("TCP socket not connected.");
+        }
+        return socket.getInputStream();
+    }
+
+    public void setSoTimeout(int timeoutMs) throws IOException {
+        if (socket == null || socket.isClosed()) {
+            throw new IOException("TCP socket not connected.");
+        }
+        socket.setSoTimeout(timeoutMs);
+    }
+
     @Override
     public void close() throws IOException {
         if (socket != null && !socket.isClosed()) {

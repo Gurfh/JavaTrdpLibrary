@@ -181,8 +181,8 @@ public class MdReplier implements AutoCloseable {
             }
 
             // 3. Process Request
-            if (reqHeader.getMessageType() == TrdpMessageType.MD_REQUEST || 
-                reqHeader.getMessageType() == TrdpMessageType.MD_REQUEST.PD_REQUEST) { 
+            if (reqHeader.getMessageType() == TrdpMessageType.MD_REQUEST ||
+                reqHeader.getMessageType() == TrdpMessageType.MD_NOTIFICATION) {
                 
                 MdRequest request = new MdRequest(
                     reqHeader.getComId(),

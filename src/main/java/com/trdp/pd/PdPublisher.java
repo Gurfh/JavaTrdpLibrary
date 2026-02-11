@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -90,7 +91,7 @@ public class PdPublisher implements AutoCloseable {
         if (data.length > TrdpConstants.TRDP_MAX_PD_DATA_SIZE) {
             throw new IllegalArgumentException("Data size exceeds maximum PD data size");
         }
-        currentData.set(data);
+        currentData.set(Arrays.copyOf(data, data.length));
     }
 
     /**

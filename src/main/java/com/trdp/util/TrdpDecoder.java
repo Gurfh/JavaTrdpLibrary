@@ -54,6 +54,11 @@ public class TrdpDecoder {
         return buffer.getInt() & 0xFFFFFFFFL;
     }
     
+    /**
+     * Decodes an unsigned 64-bit integer. For values larger than Long.MAX_VALUE,
+     * the returned long will appear negative. Use Long.toUnsignedString() to
+     * obtain the decimal representation and Long.compareUnsigned() for comparisons.
+     */
     public long getUInt64() {
         return buffer.getLong();
     }
@@ -73,8 +78,9 @@ public class TrdpDecoder {
     
     public Instant getTimeDate48() {
         long seconds = buffer.getInt() & 0xFFFFFFFFL;
-        int microsLow = buffer.getShort() & 0xFFFF;
-        return Instant.ofEpochSecond(seconds, microsLow * 1000L);
+        int ticks = buffer.getShort() & 0xFFFF;
+        long nanos = ticks * 1_000_000_000L / 65536;
+        return Instant.ofEpochSecond(seconds, nanos);
     }
     
     public Instant getTimeDate64() {

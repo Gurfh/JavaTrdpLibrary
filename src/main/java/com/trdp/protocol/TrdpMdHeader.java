@@ -141,10 +141,29 @@ public class TrdpMdHeader extends TrdpPdHeader {
     // --- Helpers ---
 
     private byte[] stringToBytes(String s, int length) {
-        byte[] b = new byte[length]; // initialized to 0
+        byte[] b = new byte[length];
         if (s != null) {
             byte[] strBytes = s.getBytes(StandardCharsets.UTF_8);
-            System.arraycopy(strBytes, 0, b, 0, Math.min(strBytes.length, length));
+            if (strBytes.length <= length) {
+                System.arraycopy(strBytes, 0, b, 0, strBytes.length);
+            } else {
+                // Truncate at a valid UTF-8 character boundary
+                int copyLen = 0;
+                int i = 0;
+                while (i < strBytes.length) {
+                    int charLen;
+                    byte lead = strBytes[i];
+                    if ((lead & 0x80) == 0) charLen = 1;
+                    else if ((lead & 0xE0) == 0xC0) charLen = 2;
+                    else if ((lead & 0xF0) == 0xE0) charLen = 3;
+                    else charLen = 4;
+
+                    if (i + charLen > length) break;
+                    i += charLen;
+                    copyLen = i;
+                }
+                System.arraycopy(strBytes, 0, b, 0, copyLen);
+            }
         }
         return b;
     }

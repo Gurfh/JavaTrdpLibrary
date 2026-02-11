@@ -31,13 +31,18 @@ public class UdpTransport implements AutoCloseable {
     public void joinMulticastGroup(InetAddress group) throws IOException {
         NetworkInterface networkInterface = NetworkInterface.getByInetAddress(
             InetAddress.getLocalHost());
-        
+
         if (networkInterface == null) {
             networkInterface = NetworkInterface.getNetworkInterfaces().nextElement();
         }
-        
+
+        logger.debug("Auto-selected network interface: {}", networkInterface.getName());
+        joinMulticastGroup(group, networkInterface);
+    }
+
+    public void joinMulticastGroup(InetAddress group, NetworkInterface networkInterface) throws IOException {
         socket.joinGroup(new InetSocketAddress(group, port), networkInterface);
-        logger.debug("Joined multicast group {} on port {}", group.getHostAddress(), port);
+        logger.debug("Joined multicast group {} on port {} via {}", group.getHostAddress(), port, networkInterface.getName());
     }
     
     public void send(byte[] data, InetAddress address, int port) throws IOException {

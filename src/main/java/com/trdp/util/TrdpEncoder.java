@@ -73,10 +73,12 @@ public class TrdpEncoder {
         return this;
     }
     
+    /**
+     * Encodes an unsigned 64-bit integer. All 64 bit patterns are valid.
+     * For values larger than Long.MAX_VALUE, use Long.toUnsignedString() to
+     * obtain the decimal representation and Long.compareUnsigned() for comparisons.
+     */
     public TrdpEncoder putUInt64(long value) {
-        if (value < 0) {
-            throw new IllegalArgumentException("UINT64 value must be non-negative");
-        }
         buffer.putLong(value);
         return this;
     }
@@ -99,9 +101,9 @@ public class TrdpEncoder {
     
     public TrdpEncoder putTimeDate48(Instant timestamp) {
         long seconds = timestamp.getEpochSecond();
-        int micros = timestamp.getNano() / 1000;
+        int ticks = (int) (timestamp.getNano() * 65536L / 1_000_000_000L);
         buffer.putInt((int) seconds);
-        buffer.putShort((short) (micros & 0xFFFF));
+        buffer.putShort((short) ticks);
         return this;
     }
     

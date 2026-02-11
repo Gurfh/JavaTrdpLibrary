@@ -168,7 +168,7 @@ public class PdPublisher implements AutoCloseable {
                 sendPd(currentData.get(), replyAddr, replyPort, TrdpMessageType.PD_REPLY, replyComId);
             }
         } catch (Exception e) {
-            logger.warn("Failed to process incoming PD packet in Publisher", e);
+            logger.error("Failed to process incoming PD packet in Publisher", e);
         }
     }
     

@@ -119,4 +119,10 @@ public class TrdpPdHeader implements TrdpHeader {
 
     @Override
     public int getHeaderFcs() { return headerFcs; }
+
+    @Override
+    public String toString() {
+        return String.format("PdHeader{type=%s, comId=%d, seq=%d, dataLen=%d, etbTopo=%d, opTrnTopo=%d}",
+            messageType, comId, sequenceCounter, datasetLength, etbTopoCnt, opTrnTopoCnt);
+    }
 }

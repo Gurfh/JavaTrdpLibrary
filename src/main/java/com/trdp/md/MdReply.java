@@ -14,4 +14,10 @@ public class MdReply {
     public int getComId() { return comId; }
     public byte[] getData() { return data; }
     public int getSequenceNumber() { return sequenceNumber; }
+
+    @Override
+    public String toString() {
+        return String.format("MdReply{comId=%d, seq=%d, dataLen=%d}",
+            comId, sequenceNumber, data != null ? data.length : 0);
+    }
 }

@@ -10,7 +10,7 @@ public class TrdpPacket {
     
     public TrdpPacket(TrdpHeader header, byte[] payload) {
         this.header = header;
-        this.payload = payload != null ? payload : new byte[0];
+        this.payload = payload != null ? Arrays.copyOf(payload, payload.length) : new byte[0];
         // Ensure the header knows the payload length
         this.header.setDatasetLength(this.payload.length);
     }
@@ -82,5 +82,5 @@ public class TrdpPacket {
     }
     
     public TrdpHeader getHeader() { return header; }
-    public byte[] getPayload() { return payload; }
+    public byte[] getPayload() { return Arrays.copyOf(payload, payload.length); }
 }

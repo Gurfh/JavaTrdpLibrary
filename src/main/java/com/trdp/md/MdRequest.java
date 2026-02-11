@@ -33,4 +33,11 @@ public class MdRequest {
     public InetAddress getSourceAddress() { return sourceAddress; }
     public int getSourcePort() { return sourcePort; }
     public int getSequenceCounter() { return sequenceCounter; }
+
+    @Override
+    public String toString() {
+        return String.format("MdRequest{comId=%d, session=%s, seq=%d, src='%s', dst='%s', from=%s:%d, dataLen=%d}",
+            comId, sessionId, sequenceCounter, sourceUri, destinationUri,
+            sourceAddress, sourcePort, data != null ? data.length : 0);
+    }
 }

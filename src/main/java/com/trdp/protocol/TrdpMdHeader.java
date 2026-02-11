@@ -168,6 +168,13 @@ public class TrdpMdHeader extends TrdpPdHeader {
         return b;
     }
 
+    @Override
+    public String toString() {
+        return String.format("MdHeader{type=%s, comId=%d, seq=%d, session=%s, dataLen=%d, srcUri='%s', dstUri='%s'}",
+            getMessageType(), getComId(), getSequenceCounter(), getSessionIdAsUuid(),
+            getDatasetLength(), getSourceUriString(), getDestinationUriString());
+    }
+
     private String bytesToString(byte[] b) {
         int len = 0;
         while (len < b.length && b[len] != 0) len++;

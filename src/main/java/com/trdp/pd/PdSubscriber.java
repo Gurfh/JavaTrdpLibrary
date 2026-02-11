@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -156,7 +157,7 @@ public class PdSubscriber implements AutoCloseable {
     private void notifyListeners(byte[] data, int sequenceNumber) {
         for (PdDataListener listener : listeners) {
             try {
-                listener.onDataReceived(comId, data, sequenceNumber);
+                listener.onDataReceived(comId, Arrays.copyOf(data, data.length), sequenceNumber);
             } catch (Exception e) {
                 logger.error("Error in PD listener callback", e);
             }

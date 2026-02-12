@@ -35,6 +35,12 @@ jobs:
     - name: Run unit tests
       run: mvn test
     
+    - name: Install tshark for wire-format compliance tests
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tshark
+        sudo setcap cap_net_raw,cap_net_admin+ep $(which dumpcap)
+
     - name: Run integration tests
       run: mvn verify
     

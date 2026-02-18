@@ -21,11 +21,15 @@ import java.net.SocketException;
 import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 public class MdReplier implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(MdReplier.class);
-    
+    private static final int MAX_WORKER_THREADS = 16;
+    private static final int WORKER_QUEUE_CAPACITY = 64;
+
     private final UdpTransport udpTransport;
     private final ServerSocket tcpListener;
     private final MdRequestHandler handler;
@@ -44,8 +48,14 @@ public class MdReplier implements AutoCloseable {
         // Listener threads (UDP + TCP Accept)
         this.executor = Executors.newFixedThreadPool(2);
         
-        // Worker pool for processing requests so we don't block the network receivers
-        this.workerPool = Executors.newCachedThreadPool();
+        // Bounded worker pool with CallerRunsPolicy for backpressure:
+        // when pool and queue are full, the submitting listener thread processes
+        // the request itself, naturally throttling intake.
+        this.workerPool = new ThreadPoolExecutor(
+            2, MAX_WORKER_THREADS,
+            60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(WORKER_QUEUE_CAPACITY),
+            new ThreadPoolExecutor.CallerRunsPolicy());
         
         logger.info("MD Replier created on port {}", port);
     }

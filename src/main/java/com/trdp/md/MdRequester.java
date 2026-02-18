@@ -27,7 +27,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class MdRequester implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(MdRequester.class);
-    
+    private static final int MAX_TCP_CONNECTIONS = 16;
+
     private final UdpTransport udpTransport;
     private final ConcurrentHashMap<String, TcpTransport> tcpConnections;
     private final AtomicInteger sequenceCounter;
@@ -121,16 +122,7 @@ public class MdRequester implements AutoCloseable {
             if (protocol == TransportProtocol.UDP) {
                 udpTransport.send(encodedPacket, InetAddress.getByName(destinationAddress), destinationPort);
             } else {
-                String destination = destinationAddress + ":" + destinationPort;
-                TcpTransport tcpTransport = tcpConnections.computeIfAbsent(destination, key -> {
-                    try {
-                        TcpTransport newTransport = new TcpTransport(destinationAddress, destinationPort);
-                        startTcpReplyListener(newTransport);
-                        return newTransport;
-                    } catch (IOException e) {
-                        throw new RuntimeException("Failed to create TCP connection", e);
-                    }
-                });
+                TcpTransport tcpTransport = getOrCreateTcpConnection(destinationAddress, destinationPort);
                 tcpTransport.send(encodedPacket);
             }
 
@@ -316,6 +308,32 @@ public class MdRequester implements AutoCloseable {
         }
     }
     
+    private synchronized TcpTransport getOrCreateTcpConnection(String host, int port) throws IOException {
+        String key = host + ":" + port;
+
+        // Evict closed/stale connections
+        tcpConnections.entrySet().removeIf(entry -> entry.getValue().isClosed());
+
+        // Reuse existing healthy connection
+        TcpTransport existing = tcpConnections.get(key);
+        if (existing != null && !existing.isClosed()) {
+            return existing;
+        }
+        tcpConnections.remove(key);
+
+        // Enforce pool capacity
+        if (tcpConnections.size() >= MAX_TCP_CONNECTIONS) {
+            throw new IOException("TCP connection pool exhausted (max " + MAX_TCP_CONNECTIONS + " connections)");
+        }
+
+        // Create new connection
+        TcpTransport newTransport = new TcpTransport(host, port);
+        tcpConnections.put(key, newTransport);
+        startTcpReplyListener(newTransport);
+        logger.debug("TCP connection pool: added {} ({}/{})", key, tcpConnections.size(), MAX_TCP_CONNECTIONS);
+        return newTransport;
+    }
+
     @Override
     public void close() {
         running = false;

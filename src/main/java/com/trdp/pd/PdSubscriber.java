@@ -177,16 +177,16 @@ public class PdSubscriber implements AutoCloseable {
     @Override
     public void close() {
         running = false;
-        executor.shutdown();
+        transport.close();
+        executor.shutdownNow();
         try {
-            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+            if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
                 executor.shutdownNow();
             }
         } catch (InterruptedException e) {
             executor.shutdownNow();
             Thread.currentThread().interrupt();
         }
-        transport.close();
         logger.info("PD Subscriber closed for ComID {}", comId);
     }
 }

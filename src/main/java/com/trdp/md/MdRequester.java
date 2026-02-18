@@ -16,11 +16,13 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.SocketTimeoutException;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch; // Import CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -31,6 +33,7 @@ public class MdRequester implements AutoCloseable {
 
     private final UdpTransport udpTransport;
     private final ConcurrentHashMap<String, TcpTransport> tcpConnections;
+    private final List<Thread> listenerThreads = new CopyOnWriteArrayList<>();
     private final AtomicInteger sequenceCounter;
     
     // Map SessionID (UUID) to Future, as per IEC 61375-2-3 A.7.8.1
@@ -165,6 +168,7 @@ public class MdRequester implements AutoCloseable {
             }
         }, "MD-Requester-Listener");
         listener.setDaemon(true);
+        listenerThreads.add(listener);
         listener.start();
     }
 
@@ -217,6 +221,7 @@ public class MdRequester implements AutoCloseable {
             }
         }, "MD-Requester-TCP-Listener");
         listener.setDaemon(true);
+        listenerThreads.add(listener);
         listener.start();
     }
     
@@ -337,26 +342,33 @@ public class MdRequester implements AutoCloseable {
     @Override
     public void close() {
         running = false;
-        
-        // 1. Cancel sessions
+
+        // 1. Cancel pending sessions
         pendingSessions.values().forEach(f -> f.cancel(true));
         pendingSessions.clear();
-        
-        // 2. Close all cached TCP connections
+
+        // 2. Close all I/O resources first to unblock listener threads
         tcpConnections.values().forEach(transport -> {
-            try { 
-                transport.close(); 
-            } catch (IOException e) { 
-                logger.error("Error closing TCP connection", e); 
+            try {
+                transport.close();
+            } catch (IOException e) {
+                logger.error("Error closing TCP connection", e);
             }
         });
-        
-        // 3. Clear the map references (Important fix)
         tcpConnections.clear();
-        
-        // 4. Close UDP transport
         udpTransport.close();
-        
+
+        // 3. Wait for listener threads to finish (should be fast now that sockets are closed)
+        for (Thread t : listenerThreads) {
+            try {
+                t.join(2000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        listenerThreads.clear();
+
         logger.info("MD Requester closed");
     }
 }

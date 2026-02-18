@@ -175,6 +175,7 @@ public class PdPublisher implements AutoCloseable {
     @Override
     public void close() {
         running = false;
+        transport.close();
         executor.shutdownNow();
         try {
             if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
@@ -183,7 +184,6 @@ public class PdPublisher implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        transport.close();
         logger.info("PD Publisher closed for ComID {}", comId);
     }
 }

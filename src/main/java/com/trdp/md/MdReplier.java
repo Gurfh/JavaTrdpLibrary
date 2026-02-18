@@ -283,12 +283,19 @@ public class MdReplier implements AutoCloseable {
     @Override
     public void close() {
         running = false;
-        
-        // shutdown listeners
-        executor.shutdownNow(); 
-        // shutdown workers (allow brief time to finish current request)
+
+        // 1. Close I/O resources first to unblock listener threads
+        try {
+            tcpListener.close();
+        } catch (IOException e) {
+            logger.error("Error closing TCP listener", e);
+        }
+        udpTransport.close();
+
+        // 2. Shutdown executors (threads should exit quickly now that sockets are closed)
+        executor.shutdownNow();
         workerPool.shutdown();
-        
+
         try {
             if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
                 executor.shutdownNow();
@@ -302,13 +309,6 @@ public class MdReplier implements AutoCloseable {
             Thread.currentThread().interrupt();
         }
 
-        try {
-            tcpListener.close();
-        } catch (IOException e) {
-            logger.error("Error closing TCP listener", e);
-        }
-
-        udpTransport.close();
         logger.info("MD Replier closed");
     }
 }

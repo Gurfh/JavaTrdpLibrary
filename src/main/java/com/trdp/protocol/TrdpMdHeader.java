@@ -1,12 +1,16 @@
 package com.trdp.protocol;
 
 import com.trdp.util.FcsUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 public class TrdpMdHeader extends TrdpPdHeader {
+    private static final Logger logger = LoggerFactory.getLogger(TrdpMdHeader.class);
     private int replyStatus;
     private byte[] sessionId = new byte[16];
     private int replyTimeout;
@@ -148,6 +152,7 @@ public class TrdpMdHeader extends TrdpPdHeader {
                 System.arraycopy(strBytes, 0, b, 0, strBytes.length);
             } else {
                 // Truncate at a valid UTF-8 character boundary
+                logger.warn("URI truncated from {} to {} bytes: '{}'", strBytes.length, length, s);
                 int copyLen = 0;
                 int i = 0;
                 while (i < strBytes.length) {

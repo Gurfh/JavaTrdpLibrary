@@ -203,6 +203,12 @@ public class MdRequester implements AutoCloseable {
                             }
                             payload = new byte[datasetLen];
                             in.readFully(payload);
+
+                            // Consume 4-byte alignment padding
+                            int padding = (4 - (datasetLen % 4)) % 4;
+                            if (padding > 0) {
+                                in.readFully(new byte[padding]);
+                            }
                         }
 
                         // 4. Reconstruct packet and process

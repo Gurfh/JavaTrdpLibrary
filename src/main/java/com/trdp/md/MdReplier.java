@@ -42,7 +42,12 @@ public class MdReplier implements AutoCloseable {
 
     public MdReplier(int port, MdRequestHandler handler) throws IOException {
         this.udpTransport = new UdpTransport(port);
-        this.tcpListener = new ServerSocket(port);
+        try {
+            this.tcpListener = new ServerSocket(port);
+        } catch (IOException e) {
+            udpTransport.close();
+            throw e;
+        }
         this.handler = handler;
         
         // Listener threads (UDP + TCP Accept)
@@ -155,8 +160,14 @@ public class MdReplier implements AutoCloseable {
                     }
                     payload = new byte[datasetLen];
                     in.readFully(payload);
+
+                    // Consume 4-byte alignment padding
+                    int padding = (4 - (datasetLen % 4)) % 4;
+                    if (padding > 0) {
+                        in.readFully(new byte[padding]);
+                    }
                 }
-                
+
                 // 4. Reconstruct full packet for processor
                 TrdpPacket packet = new TrdpPacket(header, payload);
                 // Note: We skip re-encoding for processRequest efficiency, 

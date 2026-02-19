@@ -73,6 +73,12 @@ public class TcpTransport implements AutoCloseable {
                 }
                 dataIn.readFully(buffer, TrdpConstants.TRDP_MD_HEADER_SIZE, datasetLength);
                 totalLength += datasetLength;
+
+                // Consume 4-byte alignment padding
+                int padding = (4 - (datasetLength % 4)) % 4;
+                if (padding > 0) {
+                    dataIn.readFully(new byte[padding]);
+                }
             }
 
             logger.trace("Received {} bytes (header + {} payload)", totalLength, datasetLength);

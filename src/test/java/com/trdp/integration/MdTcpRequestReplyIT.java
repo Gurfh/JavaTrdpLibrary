@@ -146,6 +146,45 @@ class MdTcpRequestReplyIT {
         assertThat(reply.getData()).isEqualTo(largeData);
     }
 
+    /**
+     * Sends two requests over the same persistent TCP connection using
+     * non-4-byte-aligned payloads.  TrdpPacket.encode() adds padding bytes
+     * to reach 4-byte alignment.  If the receiver does not consume those
+     * padding bytes, they corrupt the next message's header on the stream.
+     */
+    @Test
+    void testTcpMultipleRequestsOnSameConnection() throws Exception {
+        int port = 19456;
+
+        // Reply with a 3-byte payload (non-aligned → 1 byte padding on the wire)
+        replier = new MdReplier(port, request ->
+            new MdResponse(new byte[]{(byte) 0xBB, (byte) 0xCC, (byte) 0xDD}));
+        replier.start();
+
+        Thread.sleep(300);
+
+        requester = new MdRequester(0);
+
+        // First request — 3-byte payload (padding = 1)
+        CompletableFuture<MdReply> f1 = requester.sendRequest(
+            5000, new byte[]{1, 2, 3}, "127.0.0.1", port, TransportProtocol.TCP);
+        MdReply r1 = f1.get(10, TimeUnit.SECONDS);
+
+        assertThat(r1).isNotNull();
+        assertThat(r1.getData()).containsExactly((byte) 0xBB, (byte) 0xCC, (byte) 0xDD);
+
+        // Second request — reuses the same TCP connection.
+        // With the padding bug, the leftover byte from the first exchange
+        // would be consumed as the first byte of the next header, causing
+        // a decode/FCS failure and the request would time out.
+        CompletableFuture<MdReply> f2 = requester.sendRequest(
+            5001, new byte[]{4, 5, 6}, "127.0.0.1", port, TransportProtocol.TCP);
+        MdReply r2 = f2.get(10, TimeUnit.SECONDS);
+
+        assertThat(r2).isNotNull();
+        assertThat(r2.getData()).containsExactly((byte) 0xBB, (byte) 0xCC, (byte) 0xDD);
+    }
+
     @Test
     void testTcpTopologyMatch() throws Exception {
         int port = 19455;

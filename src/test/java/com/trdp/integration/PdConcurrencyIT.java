@@ -53,7 +53,7 @@ class PdConcurrencyIT {
             pool.submit(() -> {
                 for (int i = 0; i < publishesPerThread; i++) {
                     try {
-                        publisher.publish(("T" + threadId + "-" + i).getBytes());
+                        publisher.putDataImmediate(("T" + threadId + "-" + i).getBytes());
                         Thread.sleep(10);
                     } catch (Exception e) {
                         throw new RuntimeException(e);
@@ -95,7 +95,7 @@ class PdConcurrencyIT {
         Thread.sleep(200);
 
         publisher = new PdPublisher(comId, "127.0.0.1", port);
-        publisher.publish(new byte[]{1, 2, 3});
+        publisher.putDataImmediate(new byte[]{1, 2, 3});
 
         boolean done = latch.await(3, TimeUnit.SECONDS);
         assertThat(done).isTrue();
@@ -112,7 +112,7 @@ class PdConcurrencyIT {
         for (int i = 0; i < 10; i++) {
             PdPublisher pub = new PdPublisher(2000 + i, "127.0.0.1", 19310 + i);
             pub.start();
-            pub.publish(new byte[]{1});
+            pub.putDataImmediate(new byte[]{1});
             pub.close();
 
             PdSubscriber sub = new PdSubscriber(2000 + i, "127.0.0.1", 19320 + i);

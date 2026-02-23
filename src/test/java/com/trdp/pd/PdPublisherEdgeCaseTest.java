@@ -34,7 +34,7 @@ class PdPublisherEdgeCaseTest {
 
         // Publish 3 times and verify sequence counter increments
         for (int expectedSeq = 0; expectedSeq < 3; expectedSeq++) {
-            publisher.publish(data);
+            publisher.putDataImmediate(data);
             int len = receiver.receive(buffer, 1000);
             assertThat(len).isGreaterThan(0);
 
@@ -96,6 +96,6 @@ class PdPublisherEdgeCaseTest {
     void testPublishMaxSizeData() throws IOException {
         publisher = new PdPublisher(1000, "127.0.0.1", 17224);
         byte[] maxData = new byte[TrdpConstants.TRDP_MAX_PD_DATA_SIZE];
-        assertThatCode(() -> publisher.publish(maxData)).doesNotThrowAnyException();
+        assertThatCode(() -> publisher.putDataImmediate(maxData)).doesNotThrowAnyException();
     }
 }

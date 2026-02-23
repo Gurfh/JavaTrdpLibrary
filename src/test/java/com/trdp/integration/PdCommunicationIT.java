@@ -48,7 +48,7 @@ class PdCommunicationIT {
         Thread.sleep(500);
         
         publisher = new PdPublisher(comId, multicastGroup, port);
-        publisher.publish(testData);
+        publisher.putDataImmediate(testData);
         
         boolean received = latch.await(3, TimeUnit.SECONDS);
         
@@ -74,7 +74,7 @@ class PdCommunicationIT {
         
         publisher = new PdPublisher(comId, multicastGroup, port);
         for (int i = 0; i < messageCount; i++) {
-            publisher.publish(("Message " + i).getBytes());
+            publisher.putDataImmediate(("Message " + i).getBytes());
             Thread.sleep(100);
         }
         

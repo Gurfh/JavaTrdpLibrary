@@ -28,7 +28,7 @@ class PdPublisherTest {
         publisher = new PdPublisher(1000, "127.0.0.1", 17224);
         
         byte[] data = "Test Data".getBytes();
-        assertThatCode(() -> publisher.publish(data)).doesNotThrowAnyException();
+        assertThatCode(() -> publisher.putDataImmediate(data)).doesNotThrowAnyException();
     }
     
     @Test
@@ -37,7 +37,7 @@ class PdPublisherTest {
         
         byte[] oversizedData = new byte[TrdpConstants.TRDP_MAX_PD_DATA_SIZE + 1];
         
-        assertThatThrownBy(() -> publisher.publish(oversizedData))
+        assertThatThrownBy(() -> publisher.putDataImmediate(oversizedData))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("exceeds maximum");
     }

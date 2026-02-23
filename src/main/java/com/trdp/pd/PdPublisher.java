@@ -16,6 +16,7 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -27,11 +28,13 @@ public class PdPublisher implements AutoCloseable {
     private final int comId;
     private final InetAddress destinationAddress;
     private final int destinationPort;
+    private final long intervalUs;
     private final AtomicInteger sequenceCounter;
-    
+
     // Pull Pattern Support
     private final AtomicReference<byte[]> currentData;
     private final ExecutorService executor;
+    private ScheduledExecutorService scheduler;
     private volatile boolean running;
     private int etbTopoCnt = 0;
     private int opTrnTopoCnt = 0;
@@ -44,20 +47,38 @@ public class PdPublisher implements AutoCloseable {
     }
 
     /**
-     * Creates a PD Publisher with optional Pull pattern support.
-     * * @param comId The ComID to publish.
+     * Creates a PD Publisher with optional Pull pattern support (no cyclic send).
+     *
+     * @param comId The ComID to publish.
      * @param destinationAddress The default destination for Push messages (Multicast/Unicast).
      * @param destinationPort The default destination port for Push messages.
-     * @param listeningPort The local port to listen on for Pull requests. If 0, an ephemeral port is used (Pull unlikely to work unless Requester knows this dynamic port).
+     * @param listeningPort The local port to listen on for Pull requests. If 0, an ephemeral port is used.
      */
     public PdPublisher(int comId, String destinationAddress, int destinationPort, int listeningPort) throws IOException {
+        this(comId, destinationAddress, destinationPort, listeningPort, 0);
+    }
+
+    /**
+     * Creates a PD Publisher with optional Pull pattern support and cyclic send.
+     *
+     * @param comId The ComID to publish.
+     * @param destinationAddress The default destination for Push messages (Multicast/Unicast).
+     * @param destinationPort The default destination port for Push messages.
+     * @param listeningPort The local port to listen on for Pull requests. If 0, an ephemeral port is used.
+     * @param intervalUs The cyclic send interval in microseconds. 0 means no cyclic send (PULL-only or manual send).
+     */
+    public PdPublisher(int comId, String destinationAddress, int destinationPort, int listeningPort, long intervalUs) throws IOException {
+        if (intervalUs < 0) {
+            throw new IllegalArgumentException("intervalUs must be >= 0");
+        }
         this.comId = comId;
         this.destinationAddress = InetAddress.getByName(destinationAddress);
         this.destinationPort = destinationPort;
+        this.intervalUs = intervalUs;
         this.transport = new UdpTransport(listeningPort);
         this.sequenceCounter = new AtomicInteger(0);
         this.currentData = new AtomicReference<>(new byte[0]);
-        
+
         // Executor for handling incoming requests (Pull pattern)
         this.executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "PD-Publisher-Listener-" + comId);
@@ -65,8 +86,8 @@ public class PdPublisher implements AutoCloseable {
             return t;
         });
 
-        logger.info("PD Publisher created for ComID {} (Push to {}:{}), listening on port {}", 
-                    comId, destinationAddress, destinationPort, transport.getLocalPort());
+        logger.info("PD Publisher created for ComID {} (Push to {}:{}), listening on port {}, interval={}us",
+                    comId, destinationAddress, destinationPort, transport.getLocalPort(), intervalUs);
     }
 
     public void setTopologyCounters(int etbTopoCnt, int opTrnTopoCnt) {
@@ -75,12 +96,21 @@ public class PdPublisher implements AutoCloseable {
     }
     
     /**
-     * Starts the listener for Pull requests.
+     * Starts the listener for Pull requests and the cyclic send scheduler (if intervalUs &gt; 0).
      */
     public void start() {
         if (running) return;
         running = true;
         executor.submit(this::requestListenerLoop);
+
+        if (intervalUs > 0) {
+            scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "PD-Publisher-Cyclic-" + comId);
+                t.setDaemon(true);
+                return t;
+            });
+            scheduler.scheduleAtFixedRate(this::cyclicSend, intervalUs, intervalUs, TimeUnit.MICROSECONDS);
+        }
     }
 
     /**
@@ -96,12 +126,30 @@ public class PdPublisher implements AutoCloseable {
 
     /**
      * Updates the data and immediately sends it to the configured Push destination.
+     * Does not reset the cyclic timer.
      */
-    public void publish(byte[] data) throws IOException {
+    public void putDataImmediate(byte[] data) throws IOException {
         putData(data);
         sendPd(data, destinationAddress, destinationPort, TrdpMessageType.PD, 0);
     }
-    
+
+    private void cyclicSend() {
+        byte[] data = currentData.get();
+        if (data.length == 0) return;
+        try {
+            sendPd(data, destinationAddress, destinationPort, TrdpMessageType.PD, 0);
+        } catch (IOException e) {
+            logger.error("Cyclic PD send failed for ComID {}", comId, e);
+        }
+    }
+
+    /**
+     * Returns the cyclic send interval in microseconds. 0 means no cyclic send.
+     */
+    public long getIntervalUs() {
+        return intervalUs;
+    }
+
     private void sendPd(byte[] data, InetAddress destAddr, int destPort, TrdpMessageType type, int forcedComId) throws IOException {
         TrdpPdHeader header = new TrdpPdHeader();
         header.setSequenceCounter(sequenceCounter.getAndIncrement());
@@ -177,9 +225,13 @@ public class PdPublisher implements AutoCloseable {
         running = false;
         transport.close();
         executor.shutdownNow();
+        if (scheduler != null) {
+            scheduler.shutdownNow();
+        }
         try {
-            if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
-                executor.shutdownNow();
+            executor.awaitTermination(2, TimeUnit.SECONDS);
+            if (scheduler != null) {
+                scheduler.awaitTermination(2, TimeUnit.SECONDS);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

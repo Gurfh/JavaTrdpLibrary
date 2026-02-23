@@ -23,8 +23,10 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
 - **Process Data (PD) Support**
   - Publisher/Subscriber pattern (Push)
   - Requester/Replier pattern (Pull)
+  - Cyclic auto-retransmission with configurable interval
+  - Immediate out-of-cycle send
   - UDP multicast and unicast communication
-  - Automatic sequence numbering
+  - Automatic per-ComID sequence numbering
   - Configurable ComIDs and timeouts
   - Structured data payloads with TrdpDataset
 
@@ -36,7 +38,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Proper reply routing with ReplyComId and ReplyIpAddress
 
 - **Production-Ready Features**
-  - Comprehensive unit and integration tests (52 tests)
+  - Comprehensive unit and integration tests (185 tests)
   - Thread-safe implementation
   - Proper resource management with AutoCloseable
   - SLF4J logging integration
@@ -82,11 +84,26 @@ For a stable release (e.g., based on a Git tag like `v1.0.0`):
 ```java
 import com.trdp.pd.PdPublisher;
 
-// Create a publisher for ComID 1000
+// Create a publisher for ComID 1000 (immediate send, no cyclic)
 try (PdPublisher publisher = new PdPublisher(1000, "239.255.0.1", 17224)) {
-    // Publish data
+    // Update data and send immediately
     byte[] data = "Hello TRDP".getBytes();
-    publisher.publish(data);
+    publisher.putDataImmediate(data);
+}
+
+// Create a cyclic publisher (auto-retransmit every 100ms)
+try (PdPublisher publisher = new PdPublisher(1000, "239.255.0.1", 17224, 0, 100_000)) {
+    publisher.putData("Cyclic data".getBytes());
+    publisher.start(); // begins cyclic transmission
+
+    // Data can be updated at any time; the next cycle picks it up
+    Thread.sleep(500);
+    publisher.putData("Updated data".getBytes());
+
+    // Or send immediately without waiting for the next cycle
+    publisher.putDataImmediate("Urgent data".getBytes());
+
+    Thread.sleep(60000);
 }
 ```
 
@@ -182,6 +199,16 @@ try (PdRequester requester = new PdRequester(0)) { // 0 = ephemeral port
         17224,              // Publisher Port
         0,                  // Reply ComID
         "239.255.0.1"       // Reply to this Multicast Group
+    );
+
+    // Optionally include a payload in the request
+    requester.request(
+        1000,               // ComID
+        "192.168.1.50",     // Publisher IP
+        17224,              // Publisher Port
+        0,                  // Reply ComID
+        "239.255.0.1",      // Reply to this Multicast Group
+        new byte[]{1, 2, 3} // Optional payload
     );
 }
 
@@ -279,7 +306,7 @@ byte[] encodedData = trainData.encode();
 
 // Publish the structured data
 try (PdPublisher publisher = new PdPublisher(3000, "239.255.0.1", 19200)) {
-    publisher.publish(encodedData);
+    publisher.putDataImmediate(encodedData);
 }
 
 // Subscribe and decode the data

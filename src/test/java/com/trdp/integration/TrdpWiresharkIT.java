@@ -79,7 +79,7 @@ class TrdpWiresharkIT {
 
         pdPublisher = new PdPublisher(comId, "127.0.0.1", PD_PORT);
         pdPublisher.setTopologyCounters(etbTopo, opTrnTopo);
-        pdPublisher.publish(payload);
+        pdPublisher.putDataImmediate(payload);
 
         List<JsonNode> packets = stopAndParse(tshark);
 
@@ -195,7 +195,7 @@ class TrdpWiresharkIT {
 
         // 1. PD Push
         pdPublisher = new PdPublisher(1000, "127.0.0.1", PD_PORT);
-        pdPublisher.publish("multi-pd".getBytes(StandardCharsets.UTF_8));
+        pdPublisher.putDataImmediate("multi-pd".getBytes(StandardCharsets.UTF_8));
 
         // 2. PD Request
         pdRequester = new PdRequester(0);
@@ -240,7 +240,7 @@ class TrdpWiresharkIT {
         Thread.sleep(1000);
 
         pdPublisher = new PdPublisher(8000, "127.0.0.1", PD_PORT);
-        pdPublisher.publish("fcs-check".getBytes(StandardCharsets.UTF_8));
+        pdPublisher.putDataImmediate("fcs-check".getBytes(StandardCharsets.UTF_8));
 
         List<JsonNode> packets = stopAndParse(tshark);
 

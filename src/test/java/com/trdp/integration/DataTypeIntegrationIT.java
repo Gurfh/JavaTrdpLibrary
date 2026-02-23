@@ -72,7 +72,7 @@ class DataTypeIntegrationIT {
         Thread.sleep(500);
         
         publisher = new PdPublisher(comId, multicastGroup, port);
-        publisher.publish(encodedData);
+        publisher.putDataImmediate(encodedData);
         
         boolean received = latch.await(3, TimeUnit.SECONDS);
         

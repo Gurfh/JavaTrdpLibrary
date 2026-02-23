@@ -7,6 +7,7 @@ import com.trdp.protocol.TrdpHeader;
 import com.trdp.protocol.TrdpMdHeader;
 import com.trdp.protocol.TrdpMessageType;
 import com.trdp.protocol.TrdpPacket;
+import com.trdp.util.TrdpTopologyUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -192,7 +193,7 @@ public class MdReplier implements AutoCloseable {
             TrdpMdHeader reqHeader = (TrdpMdHeader) requestPacket.getHeader();
 
             // 2. Topology Check (IEC 61375-2-3 A.7.7)
-            if (!checkTopology(reqHeader)) {
+            if (!TrdpTopologyUtils.isValid(actualEtbTopoCnt, actualOpTrnTopoCnt, reqHeader.getEtbTopoCnt(), reqHeader.getOpTrnTopoCnt())) {
                 // Changed from WARN to DEBUG to prevent log spamming in storm conditions
                 if (logger.isDebugEnabled()) {
                     logger.debug("MD Request discarded: Topo mismatch (Local ETB: {}, Rx ETB: {})", 
@@ -244,12 +245,6 @@ public class MdReplier implements AutoCloseable {
         }
     }
     
-    private boolean checkTopology(TrdpMdHeader header) {
-        boolean etbOk = (actualEtbTopoCnt == 0) || (header.getEtbTopoCnt() == 0) || (header.getEtbTopoCnt() == actualEtbTopoCnt);
-        boolean opTrnOk = (actualOpTrnTopoCnt == 0) || (header.getOpTrnTopoCnt() == 0) || (header.getOpTrnTopoCnt() == actualOpTrnTopoCnt);
-        return etbOk && opTrnOk;
-    }
-
     private void sendReply(TrdpMdHeader reqHeader, MdResponse response, 
                            InetAddress destAddress, int destPort, Socket tcpSocket) throws IOException {
         

@@ -38,7 +38,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Proper reply routing with ReplyComId and ReplyIpAddress
 
 - **Production-Ready Features**
-  - Comprehensive unit and integration tests (185 tests)
+  - Comprehensive unit and integration tests (195+ tests)
   - Thread-safe implementation
   - Proper resource management with AutoCloseable
   - SLF4J logging integration
@@ -470,7 +470,8 @@ com.trdp
 │   ├── TrdpDataType    # Data type enumeration
 │   ├── TrdpEncoder     # Type-safe data encoder
 │   ├── TrdpDecoder     # Type-safe data decoder
-│   └── TrdpDataset     # Dataset builder/parser
+│   ├── TrdpDataset     # Dataset builder/parser
+│   └── TrdpTopologyUtils # Shared topology validation
 └── network          # Network layer
     ├── UdpTransport    # UDP transport implementation
     └── TcpTransport    # TCP transport implementation

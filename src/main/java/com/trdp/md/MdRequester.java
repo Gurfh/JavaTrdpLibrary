@@ -8,6 +8,7 @@ import com.trdp.protocol.TrdpConstants;
 import com.trdp.protocol.TrdpMdHeader;
 import com.trdp.protocol.TrdpMessageType;
 import com.trdp.protocol.TrdpPacket;
+import com.trdp.util.TrdpTopologyUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -247,7 +248,7 @@ public class MdRequester implements AutoCloseable {
             logger.debug("Received MD reply: ComID={}, SeqNo={}", header.getComId(), header.getSequenceCounter());
             
             // Check Topology (IEC 61375-2-3 A.7.8.1)
-            if (!checkTopology(header)) {
+            if (!TrdpTopologyUtils.isValid(actualEtbTopoCnt, actualOpTrnTopoCnt, header.getEtbTopoCnt(), header.getOpTrnTopoCnt())) {
                  logger.warn("Discarding MD Reply due to Topology mismatch. Local ETB: {}, Rx ETB: {}", 
                              actualEtbTopoCnt, header.getEtbTopoCnt());
                  return;
@@ -285,13 +286,6 @@ public class MdRequester implements AutoCloseable {
         } catch (Exception e) {
             logger.error("Error processing MD reply packet", e);
         }
-    }
-    
-    // Validate that the reply comes from a device with the same topology view
-    private boolean checkTopology(TrdpMdHeader header) {
-        boolean etbOk = (actualEtbTopoCnt == 0) || (header.getEtbTopoCnt() == 0) || (header.getEtbTopoCnt() == actualEtbTopoCnt);
-        boolean opTrnOk = (actualOpTrnTopoCnt == 0) || (header.getOpTrnTopoCnt() == 0) || (header.getOpTrnTopoCnt() == actualOpTrnTopoCnt);
-        return etbOk && opTrnOk;
     }
     
     private void sendConfirmation(TrdpMdHeader replyHeader, InetAddress destAddress, int destPort) {

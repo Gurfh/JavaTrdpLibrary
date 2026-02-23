@@ -5,6 +5,7 @@ import com.trdp.protocol.TrdpConstants;
 import com.trdp.protocol.TrdpMessageType;
 import com.trdp.protocol.TrdpPacket;
 import com.trdp.protocol.TrdpPdHeader;
+import com.trdp.util.TrdpTopologyUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -145,7 +146,15 @@ public class PdSubscriber implements AutoCloseable {
                 logger.debug("Received message type {}, ignoring in PD Subscriber", type);
                 return;
             }
-            
+
+            // Topology Check (IEC 61375-2-3)
+            TrdpPdHeader pdHeader = (TrdpPdHeader) packet.getHeader();
+            if (!TrdpTopologyUtils.isValid(etbTopoCnt, opTrnTopoCnt, pdHeader.getEtbTopoCnt(), pdHeader.getOpTrnTopoCnt())) {
+                logger.debug("PD packet discarded: topology mismatch (Local ETB: {}, Rx ETB: {})",
+                             etbTopoCnt, pdHeader.getEtbTopoCnt());
+                return;
+            }
+
             if (packet.getHeader().getComId() == comId) {
                 notifyListeners(packet.getPayload(), packet.getHeader().getSequenceCounter());
             }

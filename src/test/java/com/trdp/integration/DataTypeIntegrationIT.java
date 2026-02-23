@@ -1,5 +1,7 @@
 package com.trdp.integration;
 
+import com.trdp.pd.PdEvent;
+import com.trdp.pd.PdEventListener;
 import com.trdp.pd.PdPublisher;
 import com.trdp.pd.PdSubscriber;
 import com.trdp.util.TrdpDataset;
@@ -14,12 +16,13 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 class DataTypeIntegrationIT {
-    
+
     private PdPublisher publisher;
     private PdSubscriber subscriber;
-    
+
     @AfterEach
     void tearDown() {
         if (publisher != null) {
@@ -29,13 +32,21 @@ class DataTypeIntegrationIT {
             subscriber.close();
         }
     }
-    
+
+    private static PdEventListener dataOnly(Consumer<PdEvent> callback) {
+        return new PdEventListener() {
+            @Override public void onData(PdEvent event) { callback.accept(event); }
+            @Override public void onTimeout(PdEvent event) {}
+            @Override public void onValidityRestored(PdEvent event) {}
+        };
+    }
+
     @Test
     void testPublishSubscribeWithStructuredData() throws Exception {
         int comId = 3000;
         String multicastGroup = "239.255.0.1";
         int port = 19200;
-        
+
         TrdpDataset trainData = new TrdpDataset()
             .addUInt16("trainId", 1234)
             .addUInt8("carNumber", 3)
@@ -45,12 +56,12 @@ class DataTypeIntegrationIT {
             .addBool8("emergencyBrake", false)
             .addUInt32("odometer", 567890L)
             .addTimeDate64("timestamp", Instant.now());
-        
+
         byte[] encodedData = trainData.encode();
-        
+
         CountDownLatch latch = new CountDownLatch(1);
         AtomicReference<byte[]> receivedData = new AtomicReference<>();
-        
+
         List<TrdpDataset.FieldDefinition> schema = Arrays.asList(
             new TrdpDataset.FieldDefinition("trainId", TrdpDataType.UINT16),
             new TrdpDataset.FieldDefinition("carNumber", TrdpDataType.UINT8),
@@ -61,25 +72,25 @@ class DataTypeIntegrationIT {
             new TrdpDataset.FieldDefinition("odometer", TrdpDataType.UINT32),
             new TrdpDataset.FieldDefinition("timestamp", TrdpDataType.TIMEDATE64)
         );
-        
+
         subscriber = new PdSubscriber(comId, multicastGroup, port);
-        subscriber.addListener((comIdReceived, data, seqNo) -> {
-            receivedData.set(data);
+        subscriber.addListener(dataOnly(event -> {
+            receivedData.set(event.getData());
             latch.countDown();
-        });
+        }));
         subscriber.start();
-        
+
         Thread.sleep(500);
-        
+
         publisher = new PdPublisher(comId, multicastGroup, port);
         publisher.putDataImmediate(encodedData);
-        
+
         boolean received = latch.await(3, TimeUnit.SECONDS);
-        
+
         assertThat(received).isTrue();
-        
+
         TrdpDataset decoded = TrdpDataset.decode(receivedData.get(), schema);
-        
+
         assertThat(decoded.getValue("trainId")).isEqualTo(1234);
         assertThat(decoded.getValue("carNumber")).isEqualTo(3);
         assertThat((Float) decoded.getValue("speed")).isCloseTo(85.5f, within(0.1f));

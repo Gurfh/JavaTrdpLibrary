@@ -28,21 +28,31 @@ class PdSubscriberEdgeCaseTest {
         if (sender != null) sender.close();
     }
 
+    /** Helper that ignores timeout and validity-restored events. */
+    private static PdEventListener dataOnly(DataCallback callback) {
+        return new PdEventListener() {
+            @Override public void onData(PdEvent event) { callback.accept(event); }
+            @Override public void onTimeout(PdEvent event) {}
+            @Override public void onValidityRestored(PdEvent event) {}
+        };
+    }
+
+    @FunctionalInterface
+    interface DataCallback { void accept(PdEvent event); }
+
     @Test
     void testReceivesMatchingComId() throws Exception {
         int comId = 8000;
         int port = 19700;
 
         CountDownLatch latch = new CountDownLatch(1);
-        AtomicReference<byte[]> received = new AtomicReference<>();
-        AtomicInteger receivedSeq = new AtomicInteger(-1);
+        AtomicReference<PdEvent> received = new AtomicReference<>();
 
         subscriber = new PdSubscriber(comId, "127.0.0.1", port);
-        subscriber.addListener((c, data, seq) -> {
-            received.set(data);
-            receivedSeq.set(seq);
+        subscriber.addListener(dataOnly(event -> {
+            received.set(event);
             latch.countDown();
-        });
+        }));
         subscriber.start();
 
         Thread.sleep(200);
@@ -60,8 +70,14 @@ class PdSubscriberEdgeCaseTest {
 
         boolean done = latch.await(3, TimeUnit.SECONDS);
         assertThat(done).isTrue();
-        assertThat(received.get()).containsExactly(10, 20, 30);
-        assertThat(receivedSeq.get()).isEqualTo(42);
+
+        PdEvent event = received.get();
+        assertThat(event.getData()).containsExactly(10, 20, 30);
+        assertThat(event.getSequenceCounter()).isEqualTo(42);
+        assertThat(event.getComId()).isEqualTo(comId);
+        assertThat(event.getType()).isEqualTo(PdEvent.Type.DATA);
+        assertThat(event.getSourceAddress()).isNotNull();
+        assertThat(event.getResultCode()).isEqualTo(0);
     }
 
     @Test
@@ -72,7 +88,7 @@ class PdSubscriberEdgeCaseTest {
         AtomicInteger callCount = new AtomicInteger(0);
 
         subscriber = new PdSubscriber(comId, "127.0.0.1", port);
-        subscriber.addListener((c, data, seq) -> callCount.incrementAndGet());
+        subscriber.addListener(dataOnly(event -> callCount.incrementAndGet()));
         subscriber.start();
 
         Thread.sleep(200);
@@ -100,7 +116,7 @@ class PdSubscriberEdgeCaseTest {
         AtomicInteger callCount = new AtomicInteger(0);
 
         subscriber = new PdSubscriber(comId, "127.0.0.1", port);
-        subscriber.addListener((c, data, seq) -> callCount.incrementAndGet());
+        subscriber.addListener(dataOnly(event -> callCount.incrementAndGet()));
         subscriber.start();
 
         Thread.sleep(200);
@@ -126,9 +142,13 @@ class PdSubscriberEdgeCaseTest {
         int port = 19703;
 
         CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<PdEvent> received = new AtomicReference<>();
 
         subscriber = new PdSubscriber(comId, "127.0.0.1", port);
-        subscriber.addListener((c, data, seq) -> latch.countDown());
+        subscriber.addListener(dataOnly(event -> {
+            received.set(event);
+            latch.countDown();
+        }));
         subscriber.start();
 
         Thread.sleep(200);
@@ -146,6 +166,7 @@ class PdSubscriberEdgeCaseTest {
 
         boolean done = latch.await(3, TimeUnit.SECONDS);
         assertThat(done).isTrue();
+        assertThat(received.get().getType()).isEqualTo(PdEvent.Type.REPLY);
     }
 
     @Test
@@ -213,15 +234,19 @@ class PdSubscriberEdgeCaseTest {
         subscriber = new PdSubscriber(comId, "127.0.0.1", port);
 
         // First listener throws
-        subscriber.addListener((c, data, seq) -> {
-            throw new RuntimeException("Listener error");
+        subscriber.addListener(new PdEventListener() {
+            @Override public void onData(PdEvent event) {
+                throw new RuntimeException("Listener error");
+            }
+            @Override public void onTimeout(PdEvent event) {}
+            @Override public void onValidityRestored(PdEvent event) {}
         });
 
         // Second listener should still be called
-        subscriber.addListener((c, data, seq) -> {
-            received.set(data);
+        subscriber.addListener(dataOnly(event -> {
+            received.set(event.getData());
             latch.countDown();
-        });
+        }));
 
         subscriber.start();
         Thread.sleep(200);
@@ -238,5 +263,159 @@ class PdSubscriberEdgeCaseTest {
         boolean done = latch.await(3, TimeUnit.SECONDS);
         assertThat(done).isTrue();
         assertThat(received.get()).containsExactly(77);
+    }
+
+    @Test
+    void testTimeoutNotification() throws Exception {
+        int comId = 8007;
+        int port = 19709;
+
+        CountDownLatch timeoutLatch = new CountDownLatch(1);
+        AtomicReference<PdEvent> timeoutEvent = new AtomicReference<>();
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port);
+        subscriber.addListener(new PdEventListener() {
+            @Override public void onData(PdEvent event) {}
+            @Override public void onTimeout(PdEvent event) {
+                timeoutEvent.set(event);
+                timeoutLatch.countDown();
+            }
+            @Override public void onValidityRestored(PdEvent event) {}
+        });
+        subscriber.start();
+
+        // Wait for the timeout to fire (DEFAULT_PD_TIMEOUT_MS is 1000ms)
+        boolean done = timeoutLatch.await(3, TimeUnit.SECONDS);
+        assertThat(done).isTrue();
+
+        PdEvent event = timeoutEvent.get();
+        assertThat(event.getType()).isEqualTo(PdEvent.Type.TIMEOUT);
+        assertThat(event.getComId()).isEqualTo(comId);
+        assertThat(event.getData()).isNull();
+        assertThat(event.getResultCode()).isEqualTo(1);
+    }
+
+    @Test
+    void testTimeoutFiresOnlyOnce() throws Exception {
+        int comId = 8008;
+        int port = 19710;
+
+        AtomicInteger timeoutCount = new AtomicInteger(0);
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port);
+        subscriber.addListener(new PdEventListener() {
+            @Override public void onData(PdEvent event) {}
+            @Override public void onTimeout(PdEvent event) { timeoutCount.incrementAndGet(); }
+            @Override public void onValidityRestored(PdEvent event) {}
+        });
+        subscriber.start();
+
+        // Wait long enough for multiple timeout periods
+        Thread.sleep(2500);
+        assertThat(timeoutCount.get()).isEqualTo(1);
+    }
+
+    @Test
+    void testValidityRestoredAfterTimeout() throws Exception {
+        int comId = 8009;
+        int port = 19711;
+
+        CountDownLatch timeoutLatch = new CountDownLatch(1);
+        CountDownLatch restoredLatch = new CountDownLatch(1);
+        CountDownLatch dataLatch = new CountDownLatch(1);
+        AtomicReference<PdEvent> restoredEvent = new AtomicReference<>();
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port);
+        subscriber.addListener(new PdEventListener() {
+            @Override public void onData(PdEvent event) { dataLatch.countDown(); }
+            @Override public void onTimeout(PdEvent event) { timeoutLatch.countDown(); }
+            @Override public void onValidityRestored(PdEvent event) {
+                restoredEvent.set(event);
+                restoredLatch.countDown();
+            }
+        });
+        subscriber.start();
+
+        // Wait for timeout
+        boolean timedOut = timeoutLatch.await(3, TimeUnit.SECONDS);
+        assertThat(timedOut).isTrue();
+
+        // Now send a valid packet to trigger validity-restored
+        sender = new UdpTransport(0);
+        TrdpPdHeader header = new TrdpPdHeader();
+        header.setSequenceCounter(1);
+        header.setMessageType(TrdpMessageType.PD);
+        header.setComId(comId);
+        header.setDatasetLength(2);
+        TrdpPacket packet = new TrdpPacket(header, new byte[]{99, 100});
+        sender.send(packet.encode(), InetAddress.getLoopbackAddress(), port);
+
+        boolean restored = restoredLatch.await(3, TimeUnit.SECONDS);
+        assertThat(restored).isTrue();
+
+        PdEvent event = restoredEvent.get();
+        assertThat(event.getType()).isEqualTo(PdEvent.Type.VALIDITY_RESTORED);
+        assertThat(event.getComId()).isEqualTo(comId);
+        assertThat(event.getData()).containsExactly(99, 100);
+        assertThat(event.getResultCode()).isEqualTo(0);
+
+        // onData should also be called for the same packet
+        boolean dataReceived = dataLatch.await(1, TimeUnit.SECONDS);
+        assertThat(dataReceived).isTrue();
+    }
+
+    @Test
+    void testPdEventDefensiveCopy() {
+        byte[] original = {1, 2, 3};
+        PdEvent event = new PdEvent(PdEvent.Type.DATA, 100, original, 0,
+                null, null, 0, 0, 0);
+
+        // Mutating the original should not affect the event
+        original[0] = 99;
+        assertThat(event.getData()).containsExactly(1, 2, 3);
+
+        // Mutating the returned data should not affect the event
+        byte[] returned = event.getData();
+        returned[0] = 88;
+        assertThat(event.getData()).containsExactly(1, 2, 3);
+    }
+
+    @Test
+    void testPdEventNullDataForTimeout() {
+        PdEvent event = new PdEvent(PdEvent.Type.TIMEOUT, 100, null, 0,
+                null, null, 0, 0, 1);
+        assertThat(event.getData()).isNull();
+        assertThat(event.getResultCode()).isEqualTo(1);
+    }
+
+    @Test
+    void testEventSourceAddressPopulated() throws Exception {
+        int comId = 8010;
+        int port = 19712;
+
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<PdEvent> received = new AtomicReference<>();
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port);
+        subscriber.addListener(dataOnly(event -> {
+            received.set(event);
+            latch.countDown();
+        }));
+        subscriber.start();
+
+        Thread.sleep(200);
+
+        sender = new UdpTransport(0);
+        TrdpPdHeader header = new TrdpPdHeader();
+        header.setSequenceCounter(0);
+        header.setMessageType(TrdpMessageType.PD);
+        header.setComId(comId);
+        header.setDatasetLength(1);
+        TrdpPacket packet = new TrdpPacket(header, new byte[]{1});
+        sender.send(packet.encode(), InetAddress.getLoopbackAddress(), port);
+
+        boolean done = latch.await(3, TimeUnit.SECONDS);
+        assertThat(done).isTrue();
+        assertThat(received.get().getSourceAddress()).isEqualTo(InetAddress.getLoopbackAddress());
     }
 }

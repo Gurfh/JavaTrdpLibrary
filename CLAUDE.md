@@ -26,7 +26,7 @@ All source lives under `src/main/java/com/trdp/`, tests under `src/test/java/com
 ### Package Structure
 
 - **`protocol`** — Core TRDP wire format: `TrdpPdHeader` (40 bytes), `TrdpMdHeader` (116 bytes), `TrdpPacket` encode/decode, `TrdpMessageType` enum, `TrdpConstants`. All fields Big Endian except HeaderFCS (Little Endian CRC32 per IEEE 802.3).
-- **`pd`** — Process Data layer: `PdPublisher` (push/pull/cyclic), `PdSubscriber` (multicast/unicast receive), `PdRequester` (pull pattern initiator, per-ComID sequence counters), `PdDataListener` callback interface.
+- **`pd`** — Process Data layer: `PdPublisher` (push/pull/cyclic), `PdSubscriber` (multicast/unicast receive), `PdRequester` (pull pattern initiator, per-ComID sequence counters), `PdEvent` immutable event object, `PdEventListener` callback interface (onData/onTimeout/onValidityRestored).
 - **`md`** — Message Data layer: `MdRequester`/`MdReplier` for async request/reply via `CompletableFuture`, `MdRequestHandler` callback interface. Supports UDP and TCP (`TransportProtocol` enum).
 - **`util`** — `TrdpEncoder`/`TrdpDecoder` for type-safe Big Endian serialization of all IEC 61375-2-3 data types, `TrdpDataset` builder for structured payloads, `FcsUtils` for CRC32, `TrdpTopologyUtils` for shared topology validation.
 - **`network`** — `UdpTransport` (with multicast group management), `TcpTransport` (client/server with connection pooling).

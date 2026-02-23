@@ -1,5 +1,7 @@
 package com.trdp.integration;
 
+import com.trdp.pd.PdEvent;
+import com.trdp.pd.PdEventListener;
 import com.trdp.pd.PdPublisher;
 import com.trdp.pd.PdSubscriber;
 import org.junit.jupiter.api.AfterEach;
@@ -11,6 +13,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -25,6 +28,14 @@ class PdConcurrencyIT {
         if (subscriber != null) subscriber.close();
     }
 
+    private static PdEventListener dataOnly(Consumer<PdEvent> callback) {
+        return new PdEventListener() {
+            @Override public void onData(PdEvent event) { callback.accept(event); }
+            @Override public void onTimeout(PdEvent event) {}
+            @Override public void onValidityRestored(PdEvent event) {}
+        };
+    }
+
     @Test
     void testConcurrentPublishes() throws Exception {
         int comId = 1100;
@@ -37,10 +48,10 @@ class PdConcurrencyIT {
         CountDownLatch latch = new CountDownLatch(totalExpected);
 
         subscriber = new PdSubscriber(comId, "127.0.0.1", port);
-        subscriber.addListener((c, data, seq) -> {
+        subscriber.addListener(dataOnly(event -> {
             receivedCount.incrementAndGet();
             latch.countDown();
-        });
+        }));
         subscriber.start();
 
         Thread.sleep(200);
@@ -79,17 +90,16 @@ class PdConcurrencyIT {
         byte[][] received2 = new byte[1][];
 
         subscriber = new PdSubscriber(comId, "127.0.0.1", port);
-        subscriber.addListener((c, data, seq) -> {
-            // First listener mutates the data
+        subscriber.addListener(dataOnly(event -> {
+            byte[] data = event.getData();
             received1[0] = data.clone();
             data[0] = 99;
             latch.countDown();
-        });
-        subscriber.addListener((c, data, seq) -> {
-            // Second listener should get its own copy, unaffected by first
-            received2[0] = data.clone();
+        }));
+        subscriber.addListener(dataOnly(event -> {
+            received2[0] = event.getData().clone();
             latch.countDown();
-        });
+        }));
         subscriber.start();
 
         Thread.sleep(200);

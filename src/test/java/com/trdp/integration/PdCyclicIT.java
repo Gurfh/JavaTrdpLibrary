@@ -1,5 +1,7 @@
 package com.trdp.integration;
 
+import com.trdp.pd.PdEvent;
+import com.trdp.pd.PdEventListener;
 import com.trdp.pd.PdPublisher;
 import com.trdp.pd.PdSubscriber;
 import org.junit.jupiter.api.AfterEach;
@@ -9,6 +11,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -23,6 +26,14 @@ class PdCyclicIT {
         if (subscriber != null) subscriber.close();
     }
 
+    private static PdEventListener dataOnly(Consumer<PdEvent> callback) {
+        return new PdEventListener() {
+            @Override public void onData(PdEvent event) { callback.accept(event); }
+            @Override public void onTimeout(PdEvent event) {}
+            @Override public void onValidityRestored(PdEvent event) {}
+        };
+    }
+
     @Test
     void testCyclicPublishSubscribe() throws Exception {
         int comId = 1200;
@@ -33,10 +44,10 @@ class PdCyclicIT {
         CountDownLatch latch = new CountDownLatch(5);
 
         subscriber = new PdSubscriber(comId, "127.0.0.1", port);
-        subscriber.addListener((c, data, seq) -> {
+        subscriber.addListener(dataOnly(event -> {
             receivedCount.incrementAndGet();
             latch.countDown();
-        });
+        }));
         subscriber.start();
 
         Thread.sleep(200);
@@ -62,13 +73,13 @@ class PdCyclicIT {
         CountDownLatch immediateLatch = new CountDownLatch(1);
 
         subscriber = new PdSubscriber(comId, "127.0.0.1", port);
-        subscriber.addListener((c, data, seq) -> {
-            lastPayload.set(data);
+        subscriber.addListener(dataOnly(event -> {
+            lastPayload.set(event.getData());
             receivedCount.incrementAndGet();
-            if (new String(data).equals("immediate")) {
+            if (new String(event.getData()).equals("immediate")) {
                 immediateLatch.countDown();
             }
-        });
+        }));
         subscriber.start();
 
         Thread.sleep(200);

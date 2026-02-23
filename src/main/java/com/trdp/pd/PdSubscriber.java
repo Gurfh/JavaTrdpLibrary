@@ -1,5 +1,6 @@
 package com.trdp.pd;
 
+import com.trdp.network.ReceivedPacket;
 import com.trdp.network.UdpTransport;
 import com.trdp.protocol.TrdpConstants;
 import com.trdp.protocol.TrdpMessageType;
@@ -12,7 +13,6 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -21,17 +21,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class PdSubscriber implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(PdSubscriber.class);
-    
+
     private final UdpTransport transport;
     private final int comId;
-    private final CopyOnWriteArrayList<PdDataListener> listeners;
+    private final CopyOnWriteArrayList<PdEventListener> listeners;
     private final ExecutorService executor;
     private final AtomicInteger requestSequenceCounter;
     private volatile boolean running;
-    
+
     private int etbTopoCnt = 0;
     private int opTrnTopoCnt = 0;
-    
+
+    private volatile boolean timedOut = false;
+    private volatile InetAddress lastSourceAddress;
+
     public PdSubscriber(int comId, String address, int port) throws IOException {
         this.comId = comId;
         this.transport = new UdpTransport(port); // Binds to 0.0.0.0:port
@@ -42,9 +45,9 @@ public class PdSubscriber implements AutoCloseable {
             t.setDaemon(true);
             return t;
         });
-        
+
         InetAddress inetAddress = InetAddress.getByName(address);
-        
+
         // Only join if it is actually a multicast address
         if (inetAddress.isMulticastAddress()) {
             transport.joinMulticastGroup(inetAddress);
@@ -53,7 +56,7 @@ public class PdSubscriber implements AutoCloseable {
             logger.info("PD Subscriber listening for Unicast on port {}", port);
         }
     }
-    
+
     public void setTopologyCounters(int etbTopoCnt, int opTrnTopoCnt) {
         this.etbTopoCnt = etbTopoCnt;
         this.opTrnTopoCnt = opTrnTopoCnt;
@@ -77,10 +80,10 @@ public class PdSubscriber implements AutoCloseable {
         header.setComId(requestComId);
         header.setEtbTopoCnt(etbTopoCnt);
         header.setOpTrnTopoCnt(opTrnTopoCnt);
-        
+
         header.setReplyComId(replyComId);
         header.setReplyIpAddress(ipToInt(replyIpAddress));
-        
+
         header.setDatasetLength(0);
 
         TrdpPacket packet = new TrdpPacket(header, new byte[0]);
@@ -88,10 +91,10 @@ public class PdSubscriber implements AutoCloseable {
 
         InetAddress destAddr = InetAddress.getByName(destinationIp);
         transport.send(encodedPacket, destAddr, destinationPort);
-        
+
         logger.debug("Sent PD Request from Subscriber: ComID={}, Dest={}:{}", requestComId, destinationIp, destinationPort);
     }
-    
+
     private int ipToInt(String ipAddress) {
         if (ipAddress == null || ipAddress.isEmpty()) {
             return 0;
@@ -104,26 +107,28 @@ public class PdSubscriber implements AutoCloseable {
             return 0;
         }
     }
-    
+
     public void start() {
         if (running) {
             logger.warn("PD Subscriber already running for ComID {}", comId);
             return;
         }
-        
+
         running = true;
         executor.submit(this::receiveLoop);
         logger.info("PD Subscriber started for ComID {}", comId);
     }
-    
+
     private void receiveLoop() {
         byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
-        
+
         while (running) {
             try {
-                int length = transport.receive(buffer, TrdpConstants.DEFAULT_PD_TIMEOUT_MS);
-                if (length > 0) {
-                    processReceivedData(buffer, length);
+                ReceivedPacket received = transport.receiveWithSource(buffer, TrdpConstants.DEFAULT_PD_TIMEOUT_MS);
+                if (received != null) {
+                    processReceivedData(received);
+                } else {
+                    handleTimeout();
                 }
             } catch (IOException e) {
                 if (running) {
@@ -132,12 +137,27 @@ public class PdSubscriber implements AutoCloseable {
             }
         }
     }
-    
-    private void processReceivedData(byte[] buffer, int length) {
+
+    private void handleTimeout() {
+        if (!timedOut) {
+            timedOut = true;
+            PdEvent event = new PdEvent(PdEvent.Type.TIMEOUT, comId, null, 0,
+                    lastSourceAddress, null, 0, 0, 1);
+            for (PdEventListener listener : listeners) {
+                try {
+                    listener.onTimeout(event);
+                } catch (Exception e) {
+                    logger.error("Error in PD timeout listener callback", e);
+                }
+            }
+            logger.debug("PD timeout detected for ComID {}", comId);
+        }
+    }
+
+    private void processReceivedData(ReceivedPacket received) {
         try {
-            byte[] packetData = new byte[length];
-            System.arraycopy(buffer, 0, packetData, 0, length);
-            
+            byte[] packetData = received.getData();
+
             TrdpPacket packet = TrdpPacket.decode(packetData);
             TrdpMessageType type = packet.getHeader().getMessageType();
 
@@ -156,33 +176,60 @@ public class PdSubscriber implements AutoCloseable {
             }
 
             if (packet.getHeader().getComId() == comId) {
-                notifyListeners(packet.getPayload(), packet.getHeader().getSequenceCounter());
+                lastSourceAddress = received.getSourceAddress();
+
+                PdEvent.Type eventType = (type == TrdpMessageType.PD_REPLY)
+                        ? PdEvent.Type.REPLY : PdEvent.Type.DATA;
+
+                boolean wasTimedOut = timedOut;
+                timedOut = false;
+
+                if (wasTimedOut) {
+                    PdEvent restoredEvent = new PdEvent(PdEvent.Type.VALIDITY_RESTORED, comId,
+                            packet.getPayload(), pdHeader.getSequenceCounter(),
+                            received.getSourceAddress(), null,
+                            pdHeader.getReplyComId(), pdHeader.getReplyIpAddress(), 0);
+                    for (PdEventListener listener : listeners) {
+                        try {
+                            listener.onValidityRestored(restoredEvent);
+                        } catch (Exception e) {
+                            logger.error("Error in PD validity-restored listener callback", e);
+                        }
+                    }
+                    logger.debug("PD validity restored for ComID {}", comId);
+                }
+
+                PdEvent event = new PdEvent(eventType, comId,
+                        packet.getPayload(), pdHeader.getSequenceCounter(),
+                        received.getSourceAddress(), null,
+                        pdHeader.getReplyComId(), pdHeader.getReplyIpAddress(), 0);
+                notifyListeners(event);
             }
         } catch (Exception e) {
             logger.error("Error processing received PD packet", e);
         }
     }
-    
-    private void notifyListeners(byte[] data, int sequenceNumber) {
-        for (PdDataListener listener : listeners) {
+
+    private void notifyListeners(PdEvent event) {
+        for (PdEventListener listener : listeners) {
             try {
-                listener.onDataReceived(comId, Arrays.copyOf(data, data.length), sequenceNumber);
+                listener.onData(event);
             } catch (Exception e) {
                 logger.error("Error in PD listener callback", e);
             }
         }
     }
-    
-    public void addListener(PdDataListener listener) {
+
+    public void addListener(PdEventListener listener) {
         listeners.add(listener);
         logger.debug("Added listener to PD Subscriber for ComID {}", comId);
     }
-    
-    public void removeListener(PdDataListener listener) {
+
+    public void removeListener(PdEventListener listener) {
         listeners.remove(listener);
         logger.debug("Removed listener from PD Subscriber for ComID {}", comId);
     }
-    
+
     @Override
     public void close() {
         running = false;

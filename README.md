@@ -111,20 +111,34 @@ try (PdPublisher publisher = new PdPublisher(1000, "239.255.0.1", 17224, 0, 100_
 
 ```java
 import com.trdp.pd.PdSubscriber;
-import com.trdp.pd.PdDataListener;
+import com.trdp.pd.PdEvent;
+import com.trdp.pd.PdEventListener;
 
 // Create a subscriber for ComID 1000
 try (PdSubscriber subscriber = new PdSubscriber(1000, "239.255.0.1", 17224)) {
-    // Add a data listener
-    subscriber.addListener((comId, data, sequenceNumber) -> {
-        System.out.println("Received data from ComID " + comId);
-        System.out.println("Sequence: " + sequenceNumber);
-        System.out.println("Data: " + new String(data));
+    // Add an event listener
+    subscriber.addListener(new PdEventListener() {
+        @Override
+        public void onData(PdEvent event) {
+            System.out.println("Received data from ComID " + event.getComId());
+            System.out.println("Sequence: " + event.getSequenceCounter());
+            System.out.println("Source: " + event.getSourceAddress());
+        }
+
+        @Override
+        public void onTimeout(PdEvent event) {
+            System.out.println("Timeout for ComID " + event.getComId());
+        }
+
+        @Override
+        public void onValidityRestored(PdEvent event) {
+            System.out.println("Validity restored for ComID " + event.getComId());
+        }
     });
-    
+
     // Start receiving data
     subscriber.start();
-    
+
     // Keep running to receive data
     Thread.sleep(60000);
 }
@@ -460,7 +474,8 @@ com.trdp
 │   ├── PdPublisher     # PD publisher implementation
 │   ├── PdSubscriber    # PD subscriber implementation
 │   ├── PdRequester     # PD requester implementation
-│   └── PdDataListener  # Data listener interface
+│   ├── PdEvent         # Immutable PD event object
+│   └── PdEventListener # PD event listener interface
 ├── md               # Message Data components
 │   ├── MdRequester     # MD requester implementation
 │   ├── MdReplier       # MD replier implementation

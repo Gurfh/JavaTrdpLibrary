@@ -27,6 +27,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Immediate out-of-cycle send
   - UDP multicast and unicast communication
   - Automatic per-ComID sequence numbering
+  - Sequence counter validation per IEC 61375-2-3 (duplicate/old packet rejection, gap detection, sender restart handling)
   - Configurable ComIDs and timeouts
   - Structured data payloads with TrdpDataset
 
@@ -38,7 +39,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Proper reply routing with ReplyComId and ReplyIpAddress
 
 - **Production-Ready Features**
-  - Comprehensive unit and integration tests (195+ tests)
+  - Comprehensive unit and integration tests (245+ tests)
   - Thread-safe implementation
   - Proper resource management with AutoCloseable
   - SLF4J logging integration

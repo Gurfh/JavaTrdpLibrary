@@ -13,14 +13,18 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class PdSubscriber implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(PdSubscriber.class);
+
+    private record SourceKey(InetAddress sourceAddress, int comId, TrdpMessageType messageType) {}
 
     private final UdpTransport transport;
     private final int comId;
@@ -34,6 +38,10 @@ public class PdSubscriber implements AutoCloseable {
 
     private volatile boolean timedOut = false;
     private volatile InetAddress lastSourceAddress;
+
+    private final ConcurrentHashMap<SourceKey, Integer> lastSequenceCounters = new ConcurrentHashMap<>();
+    private final AtomicLong missedCount = new AtomicLong(0);
+    private final AtomicLong duplicateCount = new AtomicLong(0);
 
     public PdSubscriber(int comId, String address, int port) throws IOException {
         this.comId = comId;
@@ -141,6 +149,7 @@ public class PdSubscriber implements AutoCloseable {
     private void handleTimeout() {
         if (!timedOut) {
             timedOut = true;
+            lastSequenceCounters.clear();
             PdEvent event = new PdEvent(PdEvent.Type.TIMEOUT, comId, null, 0,
                     lastSourceAddress, null, 0, 0, 1);
             for (PdEventListener listener : listeners) {
@@ -199,6 +208,11 @@ public class PdSubscriber implements AutoCloseable {
                     logger.debug("PD validity restored for ComID {}", comId);
                 }
 
+                SourceKey sourceKey = new SourceKey(received.getSourceAddress(), comId, type);
+                if (!validateSequenceCounter(sourceKey, pdHeader.getSequenceCounter(), wasTimedOut)) {
+                    return;
+                }
+
                 PdEvent event = new PdEvent(eventType, comId,
                         packet.getPayload(), pdHeader.getSequenceCounter(),
                         received.getSourceAddress(), null,
@@ -218,6 +232,54 @@ public class PdSubscriber implements AutoCloseable {
                 logger.error("Error in PD listener callback", e);
             }
         }
+    }
+
+    /**
+     * Validates the sequence counter per IEC 61375-2-3 Table A.3.
+     *
+     * @return true if the packet should be accepted, false if it should be discarded
+     */
+    private boolean validateSequenceCounter(SourceKey sourceKey, int seqCnt, boolean wasTimedOut) {
+        Integer lastSeqCnt = lastSequenceCounters.get(sourceKey);
+
+        // First packet from this source, or seqCnt == 0 (sender restart), or subscriber was timed out
+        if (lastSeqCnt == null || seqCnt == 0 || wasTimedOut) {
+            lastSequenceCounters.put(sourceKey, seqCnt);
+            return true;
+        }
+
+        int cmp = Integer.compareUnsigned(seqCnt, lastSeqCnt);
+        if (cmp > 0) {
+            // seqCnt > lastSeqCnt: accept, count gap as missed
+            int gap = Integer.compareUnsigned(seqCnt, lastSeqCnt + 1) >= 0
+                    ? seqCnt - lastSeqCnt - 1 : 0;
+            if (gap > 0) {
+                missedCount.addAndGet(gap);
+                logger.debug("PD sequence gap for ComID {}: expected {}, got {} ({} missed)",
+                        sourceKey.comId(), lastSeqCnt + 1, seqCnt, gap);
+            }
+            lastSequenceCounters.put(sourceKey, seqCnt);
+            return true;
+        } else {
+            // seqCnt <= lastSeqCnt: duplicate or old packet
+            duplicateCount.incrementAndGet();
+            logger.debug("PD duplicate/old packet discarded for ComID {}: seqCnt={}, lastSeqCnt={}",
+                    sourceKey.comId(), Integer.toUnsignedString(seqCnt), Integer.toUnsignedString(lastSeqCnt));
+            return false;
+        }
+    }
+
+    public long getMissedCount() {
+        return missedCount.get();
+    }
+
+    public long getDuplicateCount() {
+        return duplicateCount.get();
+    }
+
+    public void resetStatistics() {
+        missedCount.set(0);
+        duplicateCount.set(0);
     }
 
     public void addListener(PdEventListener listener) {

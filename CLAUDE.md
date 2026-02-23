@@ -26,7 +26,7 @@ All source lives under `src/main/java/com/trdp/`, tests under `src/test/java/com
 ### Package Structure
 
 - **`protocol`** — Core TRDP wire format: `TrdpPdHeader` (40 bytes), `TrdpMdHeader` (116 bytes), `TrdpPacket` encode/decode, `TrdpMessageType` enum, `TrdpConstants`. All fields Big Endian except HeaderFCS (Little Endian CRC32 per IEEE 802.3).
-- **`pd`** — Process Data layer: `PdPublisher` (push/pull/cyclic), `PdSubscriber` (multicast/unicast receive), `PdRequester` (pull pattern initiator, per-ComID sequence counters), `PdEvent` immutable event object, `PdEventListener` callback interface (onData/onTimeout/onValidityRestored).
+- **`pd`** — Process Data layer: `PdPublisher` (push/pull/cyclic), `PdSubscriber` (multicast/unicast receive with sequence counter validation), `PdRequester` (pull pattern initiator, per-ComID sequence counters), `PdEvent` immutable event object, `PdEventListener` callback interface (onData/onTimeout/onValidityRestored).
 - **`md`** — Message Data layer: `MdRequester`/`MdReplier` for async request/reply via `CompletableFuture`, `MdRequestHandler` callback interface. Supports UDP and TCP (`TransportProtocol` enum).
 - **`util`** — `TrdpEncoder`/`TrdpDecoder` for type-safe Big Endian serialization of all IEC 61375-2-3 data types, `TrdpDataset` builder for structured payloads, `FcsUtils` for CRC32, `TrdpTopologyUtils` for shared topology validation.
 - **`network`** — `UdpTransport` (with multicast group management), `TcpTransport` (client/server with connection pooling).
@@ -78,6 +78,9 @@ The 16-bit fractional part of TIMEDATE48 uses binary fractions (ticks of 1/65536
 
 ### Multicast interface selection
 `UdpTransport.joinMulticastGroup(InetAddress)` auto-selects a network interface. On multi-homed systems, use the overload `joinMulticastGroup(InetAddress, NetworkInterface)` to specify the interface explicitly.
+
+### PdSubscriber sequence counter validation
+`PdSubscriber` validates incoming sequence counters per IEC 61375-2-3 Table A.3. It tracks the last sequence counter per source via a `ConcurrentHashMap` keyed by `(sourceAddress, comId, messageType)`. Rules: (1) first packet from unknown source or `seqCnt == 0` (sender restart) or subscriber was timed out → accept and reset, (2) `seqCnt > lastSeqCnt` (unsigned compare via `Integer.compareUnsigned()`) → accept and count gap as missed, (3) `seqCnt <= lastSeqCnt` → discard as duplicate/old. Timeout clears all per-source tracking. Statistics are available via `getMissedCount()`, `getDuplicateCount()`, and `resetStatistics()`. The validity-restored event always fires before sequence validation so it is never suppressed.
 
 ### URI field limits
 `TrdpMdHeader` source/destination URI fields are 32 bytes. Strings exceeding this are truncated at valid UTF-8 character boundaries (never splits multi-byte sequences). Keep URIs short.

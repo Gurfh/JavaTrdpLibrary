@@ -18,7 +18,7 @@ public final class TrdpTopologyUtils {
      * @param remoteOpTrn remote operational train topology counter (0 = wildcard)
      * @return true if the topology is valid (counters match or either side is wildcard)
      */
-    public static boolean isValid(int localEtb, int localOpTrn, int remoteEtb, int remoteOpTrn) {
+    public static boolean isValidTopology(int localEtb, int localOpTrn, int remoteEtb, int remoteOpTrn) {
         return (localEtb == 0 || remoteEtb == 0 || localEtb == remoteEtb)
             && (localOpTrn == 0 || remoteOpTrn == 0 || localOpTrn == remoteOpTrn);
     }

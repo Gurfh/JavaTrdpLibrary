@@ -42,6 +42,7 @@ public class PdSubscriber implements AutoCloseable {
     private final ConcurrentHashMap<SourceKey, Integer> lastSequenceCounters = new ConcurrentHashMap<>();
     private final AtomicLong missedCount = new AtomicLong(0);
     private final AtomicLong duplicateCount = new AtomicLong(0);
+    private final AtomicLong topoErrorCount = new AtomicLong(0);
 
     public PdSubscriber(int comId, String address, int port) throws IOException {
         this.comId = comId;
@@ -178,7 +179,8 @@ public class PdSubscriber implements AutoCloseable {
 
             // Topology Check (IEC 61375-2-3)
             TrdpPdHeader pdHeader = (TrdpPdHeader) packet.getHeader();
-            if (!TrdpTopologyUtils.isValid(etbTopoCnt, opTrnTopoCnt, pdHeader.getEtbTopoCnt(), pdHeader.getOpTrnTopoCnt())) {
+            if (!TrdpTopologyUtils.isValidTopology(etbTopoCnt, opTrnTopoCnt, pdHeader.getEtbTopoCnt(), pdHeader.getOpTrnTopoCnt())) {
+                topoErrorCount.incrementAndGet();
                 logger.debug("PD packet discarded: topology mismatch (Local ETB: {}, Rx ETB: {})",
                              etbTopoCnt, pdHeader.getEtbTopoCnt());
                 return;
@@ -277,9 +279,14 @@ public class PdSubscriber implements AutoCloseable {
         return duplicateCount.get();
     }
 
+    public long getTopoErrorCount() {
+        return topoErrorCount.get();
+    }
+
     public void resetStatistics() {
         missedCount.set(0);
         duplicateCount.set(0);
+        topoErrorCount.set(0);
     }
 
     public void addListener(PdEventListener listener) {

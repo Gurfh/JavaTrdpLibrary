@@ -193,7 +193,7 @@ public class MdReplier implements AutoCloseable {
             TrdpMdHeader reqHeader = (TrdpMdHeader) requestPacket.getHeader();
 
             // 2. Topology Check (IEC 61375-2-3 A.7.7)
-            if (!TrdpTopologyUtils.isValid(actualEtbTopoCnt, actualOpTrnTopoCnt, reqHeader.getEtbTopoCnt(), reqHeader.getOpTrnTopoCnt())) {
+            if (!TrdpTopologyUtils.isValidTopology(actualEtbTopoCnt, actualOpTrnTopoCnt, reqHeader.getEtbTopoCnt(), reqHeader.getOpTrnTopoCnt())) {
                 // Changed from WARN to DEBUG to prevent log spamming in storm conditions
                 if (logger.isDebugEnabled()) {
                     logger.debug("MD Request discarded: Topo mismatch (Local ETB: {}, Rx ETB: {})", 

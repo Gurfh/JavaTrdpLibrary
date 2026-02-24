@@ -248,7 +248,7 @@ public class MdRequester implements AutoCloseable {
             logger.debug("Received MD reply: ComID={}, SeqNo={}", header.getComId(), header.getSequenceCounter());
             
             // Check Topology (IEC 61375-2-3 A.7.8.1)
-            if (!TrdpTopologyUtils.isValid(actualEtbTopoCnt, actualOpTrnTopoCnt, header.getEtbTopoCnt(), header.getOpTrnTopoCnt())) {
+            if (!TrdpTopologyUtils.isValidTopology(actualEtbTopoCnt, actualOpTrnTopoCnt, header.getEtbTopoCnt(), header.getOpTrnTopoCnt())) {
                  logger.warn("Discarding MD Reply due to Topology mismatch. Local ETB: {}, Rx ETB: {}", 
                              actualEtbTopoCnt, header.getEtbTopoCnt());
                  return;

@@ -28,6 +28,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - UDP multicast and unicast communication
   - Automatic per-ComID sequence numbering
   - Sequence counter validation per IEC 61375-2-3 (duplicate/old packet rejection, gap detection, sender restart handling)
+  - Topology counter validation per IEC 61375-2-3 Table A.5 (ETB/OpTrn with wildcard support)
   - Configurable ComIDs and timeouts
   - Structured data payloads with TrdpDataset
 

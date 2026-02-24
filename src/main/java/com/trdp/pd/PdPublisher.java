@@ -150,7 +150,7 @@ public class PdPublisher implements AutoCloseable {
         return intervalUs;
     }
 
-    private void sendPd(byte[] data, InetAddress destAddr, int destPort, TrdpMessageType type, int forcedComId) throws IOException {
+    private synchronized void sendPd(byte[] data, InetAddress destAddr, int destPort, TrdpMessageType type, int forcedComId) throws IOException {
         TrdpPdHeader header = new TrdpPdHeader();
         header.setSequenceCounter(sequenceCounter.getAndIncrement());
         header.setMessageType(type);

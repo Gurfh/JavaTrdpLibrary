@@ -284,7 +284,7 @@ class PdSubscriberEdgeCaseTest {
         });
         subscriber.start();
 
-        // Wait for the timeout to fire (DEFAULT_PD_TIMEOUT_MS is 1000ms)
+        // Wait for the timeout to fire (DEFAULT_PD_TIMEOUT_US is 100ms)
         boolean done = timeoutLatch.await(3, TimeUnit.SECONDS);
         assertThat(done).isTrue();
 
@@ -386,6 +386,142 @@ class PdSubscriberEdgeCaseTest {
                 null, null, 0, 0, 1);
         assertThat(event.getData()).isNull();
         assertThat(event.getResultCode()).isEqualTo(1);
+    }
+
+    @Test
+    void testCustomTimeoutParameter() throws Exception {
+        int comId = 8011;
+        int port = 19713;
+        long timeoutUs = 50_000; // 50ms
+
+        CountDownLatch timeoutLatch = new CountDownLatch(1);
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port, timeoutUs);
+        subscriber.addListener(new PdEventListener() {
+            @Override public void onData(PdEvent event) {}
+            @Override public void onTimeout(PdEvent event) { timeoutLatch.countDown(); }
+            @Override public void onValidityRestored(PdEvent event) {}
+        });
+        subscriber.start();
+
+        // Should time out within ~150ms (50ms timeout + socket timeout + scheduling slack)
+        boolean done = timeoutLatch.await(1, TimeUnit.SECONDS);
+        assertThat(done).isTrue();
+    }
+
+    @Test
+    void testIsTimedOutAccessor() throws Exception {
+        int comId = 8012;
+        int port = 19714;
+        long timeoutUs = 50_000; // 50ms
+
+        CountDownLatch timeoutLatch = new CountDownLatch(1);
+        CountDownLatch dataLatch = new CountDownLatch(1);
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port, timeoutUs);
+        subscriber.addListener(new PdEventListener() {
+            @Override public void onData(PdEvent event) { dataLatch.countDown(); }
+            @Override public void onTimeout(PdEvent event) { timeoutLatch.countDown(); }
+            @Override public void onValidityRestored(PdEvent event) {}
+        });
+
+        assertThat(subscriber.isTimedOut()).isFalse();
+
+        subscriber.start();
+
+        boolean done = timeoutLatch.await(1, TimeUnit.SECONDS);
+        assertThat(done).isTrue();
+        assertThat(subscriber.isTimedOut()).isTrue();
+
+        // Send a valid packet to clear timeout
+        sender = new UdpTransport(0);
+        TrdpPdHeader header = new TrdpPdHeader();
+        header.setSequenceCounter(0);
+        header.setMessageType(TrdpMessageType.PD);
+        header.setComId(comId);
+        header.setDatasetLength(1);
+        TrdpPacket packet = new TrdpPacket(header, new byte[]{1});
+        sender.send(packet.encode(), InetAddress.getLoopbackAddress(), port);
+
+        // Wait for the packet to be processed, then check immediately
+        assertThat(dataLatch.await(1, TimeUnit.SECONDS)).isTrue();
+        assertThat(subscriber.isTimedOut()).isFalse();
+    }
+
+    @Test
+    void testTimeoutNotResetByNonMatchingPacket() throws Exception {
+        int comId = 8013;
+        int port = 19715;
+        long timeoutUs = 80_000; // 80ms
+
+        CountDownLatch timeoutLatch = new CountDownLatch(1);
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port, timeoutUs);
+        subscriber.addListener(new PdEventListener() {
+            @Override public void onData(PdEvent event) {}
+            @Override public void onTimeout(PdEvent event) { timeoutLatch.countDown(); }
+            @Override public void onValidityRestored(PdEvent event) {}
+        });
+        subscriber.start();
+
+        // Send a packet with wrong comId — should NOT reset the timeout timer
+        sender = new UdpTransport(0);
+        Thread.sleep(40); // wait ~half the timeout
+        TrdpPdHeader header = new TrdpPdHeader();
+        header.setSequenceCounter(0);
+        header.setMessageType(TrdpMessageType.PD);
+        header.setComId(9999); // non-matching
+        header.setDatasetLength(1);
+        TrdpPacket packet = new TrdpPacket(header, new byte[]{1});
+        sender.send(packet.encode(), InetAddress.getLoopbackAddress(), port);
+
+        // Timeout should still fire despite the non-matching packet
+        boolean done = timeoutLatch.await(1, TimeUnit.SECONDS);
+        assertThat(done).isTrue();
+    }
+
+    @Test
+    void testTimeoutResumesAfterValidityRestored() throws Exception {
+        int comId = 8014;
+        int port = 19716;
+        long timeoutUs = 50_000; // 50ms
+
+        AtomicInteger timeoutCount = new AtomicInteger(0);
+        CountDownLatch firstTimeout = new CountDownLatch(1);
+        CountDownLatch secondTimeout = new CountDownLatch(2);
+        CountDownLatch restoredLatch = new CountDownLatch(1);
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port, timeoutUs);
+        subscriber.addListener(new PdEventListener() {
+            @Override public void onData(PdEvent event) {}
+            @Override public void onTimeout(PdEvent event) {
+                timeoutCount.incrementAndGet();
+                firstTimeout.countDown();
+                secondTimeout.countDown();
+            }
+            @Override public void onValidityRestored(PdEvent event) { restoredLatch.countDown(); }
+        });
+        subscriber.start();
+
+        // Wait for first timeout
+        assertThat(firstTimeout.await(1, TimeUnit.SECONDS)).isTrue();
+        assertThat(timeoutCount.get()).isEqualTo(1);
+
+        // Send a valid packet to restore validity
+        sender = new UdpTransport(0);
+        TrdpPdHeader header = new TrdpPdHeader();
+        header.setSequenceCounter(0);
+        header.setMessageType(TrdpMessageType.PD);
+        header.setComId(comId);
+        header.setDatasetLength(1);
+        TrdpPacket packet = new TrdpPacket(header, new byte[]{1});
+        sender.send(packet.encode(), InetAddress.getLoopbackAddress(), port);
+
+        assertThat(restoredLatch.await(1, TimeUnit.SECONDS)).isTrue();
+
+        // Wait for second timeout (data stops again)
+        assertThat(secondTimeout.await(1, TimeUnit.SECONDS)).isTrue();
+        assertThat(timeoutCount.get()).isEqualTo(2);
     }
 
     @Test

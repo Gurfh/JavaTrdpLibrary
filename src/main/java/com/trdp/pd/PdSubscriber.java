@@ -28,6 +28,7 @@ public class PdSubscriber implements AutoCloseable {
 
     private final UdpTransport transport;
     private final int comId;
+    private final long timeoutUs;
     private final CopyOnWriteArrayList<PdEventListener> listeners;
     private final ExecutorService executor;
     private final AtomicInteger requestSequenceCounter;
@@ -37,6 +38,7 @@ public class PdSubscriber implements AutoCloseable {
     private int opTrnTopoCnt = 0;
 
     private volatile boolean timedOut = false;
+    private volatile long lastReceivedTimeNanos;
     private volatile InetAddress lastSourceAddress;
 
     private final ConcurrentHashMap<SourceKey, Integer> lastSequenceCounters = new ConcurrentHashMap<>();
@@ -45,7 +47,12 @@ public class PdSubscriber implements AutoCloseable {
     private final AtomicLong topoErrorCount = new AtomicLong(0);
 
     public PdSubscriber(int comId, String address, int port) throws IOException {
+        this(comId, address, port, TrdpConstants.DEFAULT_PD_TIMEOUT_US);
+    }
+
+    public PdSubscriber(int comId, String address, int port, long timeoutUs) throws IOException {
         this.comId = comId;
+        this.timeoutUs = timeoutUs;
         this.transport = new UdpTransport(port); // Binds to 0.0.0.0:port
         this.listeners = new CopyOnWriteArrayList<>();
         this.requestSequenceCounter = new AtomicInteger(0);
@@ -130,14 +137,23 @@ public class PdSubscriber implements AutoCloseable {
 
     private void receiveLoop() {
         byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
+        lastReceivedTimeNanos = System.nanoTime();
+
+        int socketTimeoutMs = timeoutUs > 0
+                ? Math.max(1, (int) (timeoutUs / 1000))
+                : 1000;
 
         while (running) {
             try {
-                ReceivedPacket received = transport.receiveWithSource(buffer, TrdpConstants.DEFAULT_PD_TIMEOUT_MS);
+                ReceivedPacket received = transport.receiveWithSource(buffer, socketTimeoutMs);
                 if (received != null) {
                     processReceivedData(received);
-                } else {
-                    handleTimeout();
+                }
+                if (timeoutUs > 0) {
+                    long elapsedUs = (System.nanoTime() - lastReceivedTimeNanos) / 1000;
+                    if (elapsedUs > timeoutUs && !timedOut) {
+                        handleTimeout();
+                    }
                 }
             } catch (IOException e) {
                 if (running) {
@@ -187,6 +203,7 @@ public class PdSubscriber implements AutoCloseable {
             }
 
             if (packet.getHeader().getComId() == comId) {
+                lastReceivedTimeNanos = System.nanoTime();
                 lastSourceAddress = received.getSourceAddress();
 
                 PdEvent.Type eventType = (type == TrdpMessageType.PD_REPLY)
@@ -287,6 +304,10 @@ public class PdSubscriber implements AutoCloseable {
         missedCount.set(0);
         duplicateCount.set(0);
         topoErrorCount.set(0);
+    }
+
+    public boolean isTimedOut() {
+        return timedOut;
     }
 
     public void addListener(PdEventListener listener) {

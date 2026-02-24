@@ -125,7 +125,7 @@ class PdSubscriberSequenceTest {
 
         sender = new UdpTransport(0);
         sendPacket(comId, 1, port);
-        Thread.sleep(100);
+        Thread.sleep(50);
         sendPacket(comId, 5, port); // Gap: missed 2, 3, 4
 
         boolean done = latch.await(3, TimeUnit.SECONDS);
@@ -368,11 +368,11 @@ class PdSubscriberSequenceTest {
         assertThat(done).isTrue();
 
         sendPacket(comId, 5, port); // gap of 3
-        Thread.sleep(300);
+        Thread.sleep(50);
 
         // Send duplicate to increment duplicateCount
         sendPacket(comId, 5, port);
-        Thread.sleep(300);
+        Thread.sleep(50);
 
         assertThat(subscriber.getMissedCount()).isGreaterThan(0);
         assertThat(subscriber.getDuplicateCount()).isGreaterThan(0);

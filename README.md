@@ -116,8 +116,10 @@ import com.trdp.pd.PdSubscriber;
 import com.trdp.pd.PdEvent;
 import com.trdp.pd.PdEventListener;
 
-// Create a subscriber for ComID 1000
+// Create a subscriber for ComID 1000 (default timeout: 100ms)
 try (PdSubscriber subscriber = new PdSubscriber(1000, "239.255.0.1", 17224)) {
+    // Or with a custom timeout: new PdSubscriber(1000, "239.255.0.1", 17224, 500_000) // 500ms
+
     // Add an event listener
     subscriber.addListener(new PdEventListener() {
         @Override
@@ -140,6 +142,11 @@ try (PdSubscriber subscriber = new PdSubscriber(1000, "239.255.0.1", 17224)) {
 
     // Start receiving data
     subscriber.start();
+
+    // Poll timeout state (alternative to onTimeout callback)
+    if (subscriber.isTimedOut()) {
+        System.out.println("No data received within timeout period");
+    }
 
     // Keep running to receive data
     Thread.sleep(60000);
@@ -458,7 +465,7 @@ The library supports the following TRDP message types:
 - PD Default Port: 17224 (UDP)
 - MD Default Port: 17225 (UDP/TCP)
 - Default Multicast Group: 239.255.0.1
-- Default PD Timeout: 1000ms
+- Default PD Timeout: 100ms (100,000μs)
 - Default MD Timeout: 5000ms
 - Maximum PD Data Size: 1432 bytes
 - Maximum MD Data Size: 1400 bytes

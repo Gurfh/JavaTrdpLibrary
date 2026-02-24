@@ -16,7 +16,7 @@ public final class TrdpConstants {
     
     public static final String DEFAULT_MULTICAST_GROUP = "239.255.0.1";
     
-    public static final int DEFAULT_PD_TIMEOUT_MS = 1000;
+    public static final long DEFAULT_PD_TIMEOUT_US = 100_000; // 100ms in microseconds
     public static final int DEFAULT_MD_TIMEOUT_MS = 5000;
     
     private TrdpConstants() {

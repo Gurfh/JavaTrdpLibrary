@@ -79,6 +79,9 @@ The 16-bit fractional part of TIMEDATE48 uses binary fractions (ticks of 1/65536
 ### Multicast interface selection
 `UdpTransport.joinMulticastGroup(InetAddress)` auto-selects a network interface. On multi-homed systems, use the overload `joinMulticastGroup(InetAddress, NetworkInterface)` to specify the interface explicitly.
 
+### PdSubscriber timeout / staleness detection
+`PdSubscriber` detects when data stops arriving within a configurable timeout interval. Constructor accepts `timeoutUs` (microseconds, default `DEFAULT_PD_TIMEOUT_US = 100_000` = 100ms, 0 to disable). Internally tracks `lastReceivedTimeNanos` (updated only on valid matching-comId packets — non-matching packets do not reset the timer). The receive loop uses elapsed-time comparison (`System.nanoTime()` delta) rather than relying solely on socket timeout. On first timeout: fires `onTimeout(PdEvent)` once and sets a `timedOut` flag to suppress repeats. On next valid packet: clears `timedOut`, fires `onValidityRestored(PdEvent)` before sequence validation. Public `isTimedOut()` accessor supports polling-style usage (IEC 61375-2-3 `PD.poll`).
+
 ### PdSubscriber sequence counter validation
 `PdSubscriber` validates incoming sequence counters per IEC 61375-2-3 Table A.3. It tracks the last sequence counter per source via a `ConcurrentHashMap` keyed by `(sourceAddress, comId, messageType)`. Rules: (1) first packet from unknown source or `seqCnt == 0` (sender restart) or subscriber was timed out → accept and reset, (2) `seqCnt > lastSeqCnt` (unsigned compare via `Integer.compareUnsigned()`) → accept and count gap as missed, (3) `seqCnt <= lastSeqCnt` → discard as duplicate/old. Timeout clears all per-source tracking. Statistics are available via `getMissedCount()`, `getDuplicateCount()`, `getTopoErrorCount()`, and `resetStatistics()`. The validity-restored event always fires before sequence validation so it is never suppressed.
 

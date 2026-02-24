@@ -21,7 +21,7 @@ class TrdpConstantsTest {
         assertThat(TrdpConstants.DEFAULT_PD_PORT).isEqualTo(17224);
         assertThat(TrdpConstants.DEFAULT_MD_PORT).isEqualTo(17225);
         assertThat(TrdpConstants.DEFAULT_MULTICAST_GROUP).isEqualTo("239.255.0.1");
-        assertThat(TrdpConstants.DEFAULT_PD_TIMEOUT_MS).isEqualTo(1000);
+        assertThat(TrdpConstants.DEFAULT_PD_TIMEOUT_US).isEqualTo(100_000);
         assertThat(TrdpConstants.DEFAULT_MD_TIMEOUT_MS).isEqualTo(5000);
     }
 

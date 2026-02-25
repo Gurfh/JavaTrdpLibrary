@@ -24,6 +24,10 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -36,40 +40,63 @@ public class MdRequester implements AutoCloseable {
     private final ConcurrentHashMap<String, TcpTransport> tcpConnections;
     private final List<Thread> listenerThreads = new CopyOnWriteArrayList<>();
     private final AtomicInteger sequenceCounter;
-    
+
     // Map SessionID (UUID) to Future, as per IEC 61375-2-3 A.7.8.1
     private final Map<UUID, CompletableFuture<MdReply>> pendingSessions;
-    
+
+    private final long replyTimeoutUs;
+    private final long connectTimeoutUs;
+    private final ConcurrentHashMap<String, Long> tcpLastUsedNanos;
+    private final ScheduledExecutorService tcpIdleEvictor;
+    private volatile ScheduledFuture<?> pendingEviction;
+
     private volatile boolean running;
     private final CountDownLatch listenerReadyLatch = new CountDownLatch(1);
-    
+
     private int actualEtbTopoCnt = 0;
     private int actualOpTrnTopoCnt = 0;
 
     public MdRequester(int localPort) throws IOException {
+        this(localPort, TrdpConstants.DEFAULT_MD_REPLY_TIMEOUT_US);
+    }
+
+    public MdRequester(int localPort, long replyTimeoutUs) throws IOException {
+        this(localPort, replyTimeoutUs, TrdpConstants.DEFAULT_MD_CONNECT_TIMEOUT_US);
+    }
+
+    public MdRequester(int localPort, long replyTimeoutUs, long connectTimeoutUs) throws IOException {
+        this.replyTimeoutUs = replyTimeoutUs;
+        this.connectTimeoutUs = connectTimeoutUs;
         this.udpTransport = new UdpTransport(localPort);
         this.tcpConnections = new ConcurrentHashMap<>();
+        this.tcpLastUsedNanos = new ConcurrentHashMap<>();
         this.sequenceCounter = new AtomicInteger(0);
         this.pendingSessions = new ConcurrentHashMap<>();
         this.running = true;
-        
+
+        if (connectTimeoutUs > 0) {
+            this.tcpIdleEvictor = createTcpIdleEvictor();
+        } else {
+            this.tcpIdleEvictor = null;
+        }
+
         startUdpReplyListener();
-        
+
         try {
             if (!listenerReadyLatch.await(5, TimeUnit.SECONDS)) {
-                // Handle timeout: close transport and throw exception
                 running = false;
+                shutdownEvictor();
                 udpTransport.close();
                 throw new IOException("MD Requester listener thread failed to start in time.");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            // Handle interruption: close transport and throw exception
             running = false;
+            shutdownEvictor();
             udpTransport.close();
             throw new IOException("Interrupted while waiting for listener to start", e);
         }
-        
+
         logger.info("MD Requester created on port {}", localPort);
     }
 
@@ -77,8 +104,16 @@ public class MdRequester implements AutoCloseable {
         this.actualEtbTopoCnt = etbTopoCnt;
         this.actualOpTrnTopoCnt = opTrnTopoCnt;
     }
-    
-    public CompletableFuture<MdReply> sendRequest(int comId, byte[] data, 
+
+    public long getReplyTimeoutUs() {
+        return replyTimeoutUs;
+    }
+
+    public long getConnectTimeoutUs() {
+        return connectTimeoutUs;
+    }
+
+    public CompletableFuture<MdReply> sendRequest(int comId, byte[] data,
                                                    String destinationAddress, int destinationPort) {
         return sendRequest(comId, data, destinationAddress, destinationPort, TransportProtocol.UDP);
     }
@@ -93,17 +128,27 @@ public class MdRequester implements AutoCloseable {
                                                    String destinationAddress, int destinationPort,
                                                    TransportProtocol protocol,
                                                    String sourceUri, String destinationUri) {
-        
+        return sendRequest(comId, data, destinationAddress, destinationPort, protocol, sourceUri, destinationUri, 0);
+    }
+
+    public CompletableFuture<MdReply> sendRequest(int comId, byte[] data,
+                                                   String destinationAddress, int destinationPort,
+                                                   TransportProtocol protocol,
+                                                   String sourceUri, String destinationUri,
+                                                   long perRequestReplyTimeoutUs) {
+
         if (data.length > TrdpConstants.TRDP_MAX_MD_DATA_SIZE) {
             CompletableFuture<MdReply> future = new CompletableFuture<>();
             future.completeExceptionally(new IllegalArgumentException("Data size exceeds maximum MD data size"));
             return future;
         }
-        
+
+        long effectiveTimeoutUs = perRequestReplyTimeoutUs > 0 ? perRequestReplyTimeoutUs : this.replyTimeoutUs;
+
         UUID sessionId = UUID.randomUUID();
         int seqNo = sequenceCounter.getAndIncrement();
         CompletableFuture<MdReply> future = new CompletableFuture<>();
-        
+
         try {
             TrdpMdHeader header = new TrdpMdHeader();
             header.setSequenceCounter(seqNo);
@@ -112,17 +157,17 @@ public class MdRequester implements AutoCloseable {
             header.setSessionId(sessionId);
             header.setSourceUri(sourceUri);
             header.setDestinationUri(destinationUri);
-            header.setReplyTimeout(TrdpConstants.DEFAULT_MD_TIMEOUT_MS * 1000); // Microseconds
-            
+            header.setReplyTimeout((int) effectiveTimeoutUs);
+
             // Set topology counters
             header.setEtbTopoCnt(actualEtbTopoCnt);
             header.setOpTrnTopoCnt(actualOpTrnTopoCnt);
-            
+
             TrdpPacket packet = new TrdpPacket(header, data);
             byte[] encodedPacket = packet.encode();
-            
+
             pendingSessions.put(sessionId, future);
-            
+
             if (protocol == TransportProtocol.UDP) {
                 udpTransport.send(encodedPacket, InetAddress.getByName(destinationAddress), destinationPort);
             } else {
@@ -130,37 +175,46 @@ public class MdRequester implements AutoCloseable {
                 tcpTransport.send(encodedPacket);
             }
 
-            logger.debug("Sent MD request: ComID={}, SessionID={}, Dest={}:{}", 
+            logger.debug("Sent MD request: ComID={}, SessionID={}, Dest={}:{}",
                        comId, sessionId, destinationAddress, destinationPort);
-            
-            future.orTimeout(TrdpConstants.DEFAULT_MD_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                  .whenComplete((reply, ex) -> {
-                      if (ex != null) {
-                          pendingSessions.remove(sessionId);
-                          if (ex instanceof TimeoutException) {
-                              logger.warn("MD request timeout: SessionID={}", sessionId);
+
+            if (effectiveTimeoutUs > 0) {
+                long effectiveTimeoutMs = effectiveTimeoutUs / 1000;
+                future.orTimeout(effectiveTimeoutMs, TimeUnit.MILLISECONDS)
+                      .whenComplete((reply, ex) -> {
+                          if (ex != null) {
+                              pendingSessions.remove(sessionId);
+                              if (ex instanceof TimeoutException) {
+                                  logger.warn("MD request timeout: SessionID={}", sessionId);
+                              }
                           }
-                      }
-                  });
-            
+                      });
+            }
+
         } catch (IOException e) {
             future.completeExceptionally(e);
             pendingSessions.remove(sessionId);
         }
-        
+
         return future;
     }
-    
+
     private void startUdpReplyListener() {
+        int pollTimeoutMs = (int) Math.min(replyTimeoutUs / 1000, 5000);
+        if (pollTimeoutMs <= 0) {
+            pollTimeoutMs = 5000;
+        }
+        final int soTimeout = pollTimeoutMs;
+
         Thread listener = new Thread(() -> {
             byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
             listenerReadyLatch.countDown();
-            
+
             while (running) {
                 try {
-                    ReceivedPacket packet = udpTransport.receiveWithSource(buffer, TrdpConstants.DEFAULT_MD_TIMEOUT_MS);
+                    ReceivedPacket packet = udpTransport.receiveWithSource(buffer, soTimeout);
                     if (packet != null) {
-                        processReplyPacket(packet.getData(), packet.getLength(), 
+                        processReplyPacket(packet.getData(), packet.getLength(),
                                          packet.getSourceAddress(), packet.getSourcePort());
                     }
                 } catch (IOException e) {
@@ -174,9 +228,15 @@ public class MdRequester implements AutoCloseable {
     }
 
     private void startTcpReplyListener(TcpTransport tcpTransport) {
+        int pollTimeoutMs = (int) Math.min(replyTimeoutUs / 1000, 5000);
+        if (pollTimeoutMs <= 0) {
+            pollTimeoutMs = 5000;
+        }
+        final int soTimeout = pollTimeoutMs;
+
         Thread listener = new Thread(() -> {
             try {
-                tcpTransport.setSoTimeout(TrdpConstants.DEFAULT_MD_TIMEOUT_MS);
+                tcpTransport.setSoTimeout(soTimeout);
                 DataInputStream in = new DataInputStream(tcpTransport.getInputStream());
 
                 while (running && !tcpTransport.isClosed()) {
@@ -231,25 +291,25 @@ public class MdRequester implements AutoCloseable {
         listenerThreads.add(listener);
         listener.start();
     }
-    
+
     private void processReplyPacket(byte[] buffer, int length, InetAddress sourceAddress, int sourcePort) {
         try {
             byte[] packetData = new byte[length];
             System.arraycopy(buffer, 0, packetData, 0, length);
-            
+
             TrdpPacket packet = TrdpPacket.decode(packetData);
-            
+
             // Check if it is an MD Header
             if (!(packet.getHeader() instanceof TrdpMdHeader)) {
                 return;
             }
-            
+
             TrdpMdHeader header = (TrdpMdHeader) packet.getHeader();
             logger.debug("Received MD reply: ComID={}, SeqNo={}", header.getComId(), header.getSequenceCounter());
-            
+
             // Check Topology (IEC 61375-2-3 A.7.8.1)
             if (!TrdpTopologyUtils.isValidTopology(actualEtbTopoCnt, actualOpTrnTopoCnt, header.getEtbTopoCnt(), header.getOpTrnTopoCnt())) {
-                 logger.warn("Discarding MD Reply due to Topology mismatch. Local ETB: {}, Rx ETB: {}", 
+                 logger.warn("Discarding MD Reply due to Topology mismatch. Local ETB: {}, Rx ETB: {}",
                              actualEtbTopoCnt, header.getEtbTopoCnt());
                  return;
             }
@@ -265,18 +325,18 @@ public class MdRequester implements AutoCloseable {
             }
 
             if (type == TrdpMessageType.MD_REPLY || type == TrdpMessageType.MD_REPLY_CONFIRM) {
-                
+
                 MdReply reply = new MdReply(header.getComId(), packet.getPayload(), header.getSequenceCounter());
-                
+
                 if (type == TrdpMessageType.MD_REPLY_CONFIRM) {
                     // Mq -> Send Mc (Confirmation)
                     sendConfirmation(header, sourceAddress, sourcePort);
                 }
-                
+
                 // Complete the user's future (Mp or Mq received)
                 future.complete(reply);
                 pendingSessions.remove(sessionId);
-                
+
             } else if (type == TrdpMessageType.MD_ERROR) {
                 // Me -> Exception
                 future.completeExceptionally(new RuntimeException("TRDP Error received. Status: " + header.getReplyStatus()));
@@ -287,7 +347,7 @@ public class MdRequester implements AutoCloseable {
             logger.error("Error processing MD reply packet", e);
         }
     }
-    
+
     private void sendConfirmation(TrdpMdHeader replyHeader, InetAddress destAddress, int destPort) {
         try {
             TrdpMdHeader confirmHeader = new TrdpMdHeader();
@@ -297,14 +357,14 @@ public class MdRequester implements AutoCloseable {
             confirmHeader.setSequenceCounter(replyHeader.getSequenceCounter());
             // Mirror URIs for routing if needed, standard says confirm uses source URI from reply
             confirmHeader.setDestinationUri(replyHeader.getSourceUriString());
-            
+
             TrdpPacket confirmPacket = new TrdpPacket(confirmHeader, new byte[0]);
-            
+
             if (destAddress != null) {
                 udpTransport.send(confirmPacket.encode(), destAddress, destPort);
                 logger.debug("Sent MD Confirmation (Mc) for SessionID: {}", replyHeader.getSessionIdAsUuid());
             } else {
-                // For TCP, we would need the socket context. 
+                // For TCP, we would need the socket context.
                 // In this implementation, TCP confirmation is sent on the open connection if tracked.
                 logger.warn("Cannot send Confirmation via UDP for TCP session context (Not fully implemented for TCP)");
             }
@@ -312,7 +372,69 @@ public class MdRequester implements AutoCloseable {
             logger.error("Failed to send MD confirmation", e);
         }
     }
-    
+
+    private ScheduledExecutorService createTcpIdleEvictor() {
+        ScheduledThreadPoolExecutor exec = new ScheduledThreadPoolExecutor(1, r -> {
+            Thread t = new Thread(r, "MD-Requester-TCP-Evictor");
+            t.setDaemon(true);
+            return t;
+        });
+        exec.prestartCoreThread();
+        return exec;
+    }
+
+    private void scheduleEvictionIfNeeded() {
+        if (tcpIdleEvictor == null) return;
+        ScheduledFuture<?> existing = pendingEviction;
+        if (existing == null || existing.isDone()) {
+            pendingEviction = tcpIdleEvictor.schedule(
+                this::runEvictionAndReschedule,
+                connectTimeoutUs * 1000, TimeUnit.NANOSECONDS);
+        }
+    }
+
+    private void runEvictionAndReschedule() {
+        long now = System.nanoTime();
+        long connectTimeoutNanos = connectTimeoutUs * 1000;
+        long earliestExpiry = Long.MAX_VALUE;
+
+        for (Map.Entry<String, Long> entry : tcpLastUsedNanos.entrySet()) {
+            String key = entry.getKey();
+            long lastUsed = entry.getValue();
+            if (now - lastUsed > connectTimeoutNanos) {
+                TcpTransport transport = tcpConnections.remove(key);
+                tcpLastUsedNanos.remove(key);
+                if (transport != null) {
+                    try {
+                        transport.close();
+                        logger.debug("Evicted idle TCP connection: {}", key);
+                    } catch (IOException e) {
+                        logger.error("Error closing evicted TCP connection: {}", key, e);
+                    }
+                }
+            } else {
+                long expiry = lastUsed + connectTimeoutNanos;
+                if (expiry < earliestExpiry) {
+                    earliestExpiry = expiry;
+                }
+            }
+        }
+
+        // Reschedule for the earliest remaining expiry, or go quiescent
+        if (earliestExpiry < Long.MAX_VALUE) {
+            long delayNanos = Math.max(earliestExpiry - System.nanoTime(), 0);
+            try {
+                pendingEviction = tcpIdleEvictor.schedule(
+                    this::runEvictionAndReschedule,
+                    delayNanos, TimeUnit.NANOSECONDS);
+            } catch (RejectedExecutionException e) {
+                // Executor shut down during reschedule — normal during close()
+            }
+        } else {
+            pendingEviction = null;
+        }
+    }
+
     private synchronized TcpTransport getOrCreateTcpConnection(String host, int port) throws IOException {
         String key = host + ":" + port;
 
@@ -322,6 +444,8 @@ public class MdRequester implements AutoCloseable {
         // Reuse existing healthy connection
         TcpTransport existing = tcpConnections.get(key);
         if (existing != null && !existing.isClosed()) {
+            tcpLastUsedNanos.put(key, System.nanoTime());
+            scheduleEvictionIfNeeded();
             return existing;
         }
         tcpConnections.remove(key);
@@ -334,9 +458,19 @@ public class MdRequester implements AutoCloseable {
         // Create new connection
         TcpTransport newTransport = new TcpTransport(host, port);
         tcpConnections.put(key, newTransport);
+        tcpLastUsedNanos.put(key, System.nanoTime());
+        scheduleEvictionIfNeeded();
         startTcpReplyListener(newTransport);
         logger.debug("TCP connection pool: added {} ({}/{})", key, tcpConnections.size(), MAX_TCP_CONNECTIONS);
         return newTransport;
+    }
+
+    private void shutdownEvictor() {
+        ScheduledFuture<?> f = pendingEviction;
+        if (f != null) f.cancel(false);
+        if (tcpIdleEvictor != null) {
+            tcpIdleEvictor.shutdownNow();
+        }
     }
 
     @Override
@@ -347,7 +481,10 @@ public class MdRequester implements AutoCloseable {
         pendingSessions.values().forEach(f -> f.cancel(true));
         pendingSessions.clear();
 
-        // 2. Close all I/O resources first to unblock listener threads
+        // 2. Shutdown TCP idle evictor
+        shutdownEvictor();
+
+        // 3. Close all I/O resources first to unblock listener threads
         tcpConnections.values().forEach(transport -> {
             try {
                 transport.close();
@@ -356,9 +493,10 @@ public class MdRequester implements AutoCloseable {
             }
         });
         tcpConnections.clear();
+        tcpLastUsedNanos.clear();
         udpTransport.close();
 
-        // 3. Wait for listener threads to finish (should be fast now that sockets are closed)
+        // 4. Wait for listener threads to finish (should be fast now that sockets are closed)
         for (Thread t : listenerThreads) {
             try {
                 t.join(2000);

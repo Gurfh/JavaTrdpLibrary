@@ -139,6 +139,45 @@ class ThreadLifecycleTest {
             .isEmpty();
     }
 
+    // --- MdRequester TCP Evictor ---
+
+    @Test
+    void testMdRequesterEvictorThreadDiesAfterClose() throws Exception {
+        MdRequester requester = new MdRequester(0);
+        Thread.sleep(100);
+
+        assertThat(findThreadsByPrefix("MD-Requester-TCP-Evictor"))
+            .as("Evictor thread should be running before close")
+            .isNotEmpty();
+
+        requester.close();
+        Thread.sleep(200);
+
+        assertThat(findThreadsByPrefix("MD-Requester-TCP-Evictor"))
+            .as("Evictor thread should be dead after close")
+            .isEmpty();
+    }
+
+    // --- MdReplier Confirm Timeout Checker ---
+
+    @Test
+    void testMdReplierConfirmCheckerDiesAfterClose() throws Exception {
+        MdReplier replier = new MdReplier(0, req -> new MdResponse("ok".getBytes()));
+        replier.start();
+        Thread.sleep(100);
+
+        assertThat(findThreadsByPrefix("MD-Replier-Confirm-Timeout"))
+            .as("Confirm timeout checker should be running before close")
+            .isNotEmpty();
+
+        replier.close();
+        Thread.sleep(200);
+
+        assertThat(findThreadsByPrefix("MD-Replier-Confirm-Timeout"))
+            .as("Confirm timeout checker should be dead after close")
+            .isEmpty();
+    }
+
     // --- Helpers ---
 
     private static long timedClose(Runnable closeAction) {

@@ -466,7 +466,9 @@ The library supports the following TRDP message types:
 - MD Default Port: 17225 (UDP/TCP)
 - Default Multicast Group: 239.255.0.1
 - Default PD Timeout: 100ms (100,000μs)
-- Default MD Timeout: 5000ms
+- Default MD Reply Timeout: 5s (5,000,000μs)
+- Default MD Confirm Timeout: 1s (1,000,000μs)
+- Default MD Connect Timeout: 60s (60,000,000μs)
 - Maximum PD Data Size: 1432 bytes
 - Maximum MD Data Size: 1400 bytes
 

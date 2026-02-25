@@ -90,3 +90,9 @@ The 16-bit fractional part of TIMEDATE48 uses binary fractions (ticks of 1/65536
 
 ### URI field limits
 `TrdpMdHeader` source/destination URI fields are 32 bytes. Strings exceeding this are truncated at valid UTF-8 character boundaries (never splits multi-byte sequences). Keep URIs short.
+
+### MD configurable timeouts
+`MdRequester` supports three constructor overloads: `(port)`, `(port, replyTimeoutUs)`, `(port, replyTimeoutUs, connectTimeoutUs)`. The `sendRequest` 8-param overload accepts `perRequestReplyTimeoutUs` (0 = use instance default). `MdReplier` accepts `(port, handler)` or `(port, handler, confirmTimeoutUs)`. Defaults are in `TrdpConstants`: reply 5s, confirm 1s, connect 60s — all in microseconds matching PD convention.
+
+### MD demand-driven timeout scheduling
+`MdRequester` TCP idle eviction and `MdReplier` confirmation timeout checking use demand-driven single-shot scheduling (not fixed-rate polling). Tasks are scheduled only when entries are added and self-reschedule if entries remain after expiry. This means zero CPU overhead when no TCP connections or pending confirmations exist. The `ScheduledExecutorService` is created eagerly (with `prestartCoreThread()` for thread visibility in tests) but no task runs until needed.

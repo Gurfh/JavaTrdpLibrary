@@ -44,6 +44,9 @@ public class MdRequester implements AutoCloseable {
     // Map SessionID (UUID) to Future, as per IEC 61375-2-3 A.7.8.1
     private final Map<UUID, CompletableFuture<MdReply>> pendingSessions;
 
+    // Map SessionID to TcpTransport for TCP confirmation routing
+    private final Map<UUID, TcpTransport> tcpSessionTransports;
+
     private final long replyTimeoutUs;
     private final long connectTimeoutUs;
     private final ConcurrentHashMap<String, Long> tcpLastUsedNanos;
@@ -72,6 +75,7 @@ public class MdRequester implements AutoCloseable {
         this.tcpLastUsedNanos = new ConcurrentHashMap<>();
         this.sequenceCounter = new AtomicInteger(0);
         this.pendingSessions = new ConcurrentHashMap<>();
+        this.tcpSessionTransports = new ConcurrentHashMap<>();
         this.running = true;
 
         if (connectTimeoutUs > 0) {
@@ -172,6 +176,7 @@ public class MdRequester implements AutoCloseable {
                 udpTransport.send(encodedPacket, InetAddress.getByName(destinationAddress), destinationPort);
             } else {
                 TcpTransport tcpTransport = getOrCreateTcpConnection(destinationAddress, destinationPort);
+                tcpSessionTransports.put(sessionId, tcpTransport);
                 tcpTransport.send(encodedPacket);
             }
 
@@ -184,6 +189,7 @@ public class MdRequester implements AutoCloseable {
                       .whenComplete((reply, ex) -> {
                           if (ex != null) {
                               pendingSessions.remove(sessionId);
+                              tcpSessionTransports.remove(sessionId);
                               if (ex instanceof TimeoutException) {
                                   logger.warn("MD request timeout: SessionID={}", sessionId);
                               }
@@ -194,6 +200,7 @@ public class MdRequester implements AutoCloseable {
         } catch (IOException e) {
             future.completeExceptionally(e);
             pendingSessions.remove(sessionId);
+            tcpSessionTransports.remove(sessionId);
         }
 
         return future;
@@ -336,11 +343,13 @@ public class MdRequester implements AutoCloseable {
                 // Complete the user's future (Mp or Mq received)
                 future.complete(reply);
                 pendingSessions.remove(sessionId);
+                tcpSessionTransports.remove(sessionId);
 
             } else if (type == TrdpMessageType.MD_ERROR) {
                 // Me -> Exception
                 future.completeExceptionally(new RuntimeException("TRDP Error received. Status: " + header.getReplyStatus()));
                 pendingSessions.remove(sessionId);
+                tcpSessionTransports.remove(sessionId);
             }
 
         } catch (Exception e) {
@@ -360,13 +369,19 @@ public class MdRequester implements AutoCloseable {
 
             TrdpPacket confirmPacket = new TrdpPacket(confirmHeader, new byte[0]);
 
+            UUID sessionId = replyHeader.getSessionIdAsUuid();
             if (destAddress != null) {
                 udpTransport.send(confirmPacket.encode(), destAddress, destPort);
-                logger.debug("Sent MD Confirmation (Mc) for SessionID: {}", replyHeader.getSessionIdAsUuid());
+                logger.debug("Sent MD Confirmation (Mc) via UDP for SessionID: {}", sessionId);
             } else {
-                // For TCP, we would need the socket context.
-                // In this implementation, TCP confirmation is sent on the open connection if tracked.
-                logger.warn("Cannot send Confirmation via UDP for TCP session context (Not fully implemented for TCP)");
+                // TCP: send confirmation on the same TCP connection used for the request
+                TcpTransport tcpTransport = tcpSessionTransports.get(sessionId);
+                if (tcpTransport != null && !tcpTransport.isClosed()) {
+                    tcpTransport.send(confirmPacket.encode());
+                    logger.debug("Sent MD Confirmation (Mc) via TCP for SessionID: {}", sessionId);
+                } else {
+                    logger.warn("No TCP connection available for Mc: SessionID={}", sessionId);
+                }
             }
         } catch (IOException e) {
             logger.error("Failed to send MD confirmation", e);
@@ -480,6 +495,7 @@ public class MdRequester implements AutoCloseable {
         // 1. Cancel pending sessions
         pendingSessions.values().forEach(f -> f.cancel(true));
         pendingSessions.clear();
+        tcpSessionTransports.clear();
 
         // 2. Shutdown TCP idle evictor
         shutdownEvictor();

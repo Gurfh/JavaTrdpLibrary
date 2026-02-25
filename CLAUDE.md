@@ -94,5 +94,8 @@ The 16-bit fractional part of TIMEDATE48 uses binary fractions (ticks of 1/65536
 ### MD configurable timeouts
 `MdRequester` supports three constructor overloads: `(port)`, `(port, replyTimeoutUs)`, `(port, replyTimeoutUs, connectTimeoutUs)`. The `sendRequest` 8-param overload accepts `perRequestReplyTimeoutUs` (0 = use instance default). `MdReplier` accepts `(port, handler)` or `(port, handler, confirmTimeoutUs)`. Defaults are in `TrdpConstants`: reply 5s, confirm 1s, connect 60s — all in microseconds matching PD convention.
 
+### MD TCP confirmation routing
+`MdRequester` tracks TCP connections per session via `ConcurrentHashMap<UUID, TcpTransport> tcpSessionTransports`. When `sendRequest()` uses TCP, the `TcpTransport` is stored keyed by session UUID. When an `MD_REPLY_CONFIRM` (Mq) reply arrives over TCP, `sendConfirmation()` looks up the transport and sends the `MD_CONFIRM` (Mc) packet on the same TCP connection. The mapping is cleaned up on session completion, timeout, error, and `close()`.
+
 ### MD demand-driven timeout scheduling
 `MdRequester` TCP idle eviction and `MdReplier` confirmation timeout checking use demand-driven single-shot scheduling (not fixed-rate polling). Tasks are scheduled only when entries are added and self-reschedule if entries remain after expiry. This means zero CPU overhead when no TCP connections or pending confirmations exist. The `ScheduledExecutorService` is created eagerly (with `prestartCoreThread()` for thread visibility in tests) but no task runs until needed.

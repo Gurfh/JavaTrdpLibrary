@@ -34,13 +34,14 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
 
 - **Message Data (MD) Support**
   - Request/Reply pattern over UDP and TCP
+  - TCP confirmation (Mc) sent on the same connection as the request
   - Asynchronous communication with CompletableFuture
   - Configurable request handlers
   - Timeout management
   - Proper reply routing with ReplyComId and ReplyIpAddress
 
 - **Production-Ready Features**
-  - Comprehensive unit and integration tests (245+ tests)
+  - Comprehensive unit and integration tests (290+ tests)
   - Thread-safe implementation
   - Proper resource management with AutoCloseable
   - SLF4J logging integration

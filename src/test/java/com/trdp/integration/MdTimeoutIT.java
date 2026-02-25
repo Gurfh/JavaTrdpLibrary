@@ -39,7 +39,8 @@ class MdTimeoutIT {
         requester = new MdRequester(0, 200_000);
 
         CompletableFuture<MdReply> future = requester.sendRequest(
-            10000, "test".getBytes(), "127.0.0.1", replierPort);
+            10000, "test".getBytes(), "127.0.0.1", replierPort,
+            TransportProtocol.UDP, null, null, 0, 0);
 
         assertThatThrownBy(() -> future.get(3, TimeUnit.SECONDS))
             .isInstanceOf(ExecutionException.class);
@@ -83,10 +84,10 @@ class MdTimeoutIT {
         // Requester with 5s default — both requests use per-request override
         requester = new MdRequester(0, 5_000_000);
 
-        // Request 1: 200ms timeout — should time out (reply takes 400ms)
+        // Request 1: 200ms timeout, no retries — should time out (reply takes 400ms)
         CompletableFuture<MdReply> fast = requester.sendRequest(
             10002, "a".getBytes(), "127.0.0.1", replierPort,
-            TransportProtocol.UDP, null, null, 200_000);
+            TransportProtocol.UDP, null, null, 200_000, 0);
 
         assertThatThrownBy(() -> fast.get(3, TimeUnit.SECONDS))
             .isInstanceOf(ExecutionException.class);

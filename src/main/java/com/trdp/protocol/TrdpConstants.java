@@ -20,7 +20,8 @@ public final class TrdpConstants {
     public static final long DEFAULT_MD_REPLY_TIMEOUT_US = 5_000_000;    // 5s
     public static final long DEFAULT_MD_CONFIRM_TIMEOUT_US = 1_000_000;  // 1s
     public static final long DEFAULT_MD_CONNECT_TIMEOUT_US = 60_000_000; // 60s
-    
+    public static final int DEFAULT_MD_MAX_RETRIES = 2;               // per IEC 61375-2-3 Table A.19
+
     private TrdpConstants() {
         throw new UnsupportedOperationException("Utility class");
     }

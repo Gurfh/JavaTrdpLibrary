@@ -53,6 +53,9 @@ public class MdRequester implements AutoCloseable {
     private final ScheduledExecutorService tcpIdleEvictor;
     private volatile ScheduledFuture<?> pendingEviction;
 
+    private final ScheduledExecutorService retryScheduler;
+    private final Map<UUID, ScheduledFuture<?>> pendingRetries;
+
     private volatile boolean running;
     private final CountDownLatch listenerReadyLatch = new CountDownLatch(1);
 
@@ -76,6 +79,8 @@ public class MdRequester implements AutoCloseable {
         this.sequenceCounter = new AtomicInteger(0);
         this.pendingSessions = new ConcurrentHashMap<>();
         this.tcpSessionTransports = new ConcurrentHashMap<>();
+        this.pendingRetries = new ConcurrentHashMap<>();
+        this.retryScheduler = createRetryScheduler();
         this.running = true;
 
         if (connectTimeoutUs > 0) {
@@ -140,6 +145,24 @@ public class MdRequester implements AutoCloseable {
                                                    TransportProtocol protocol,
                                                    String sourceUri, String destinationUri,
                                                    long perRequestReplyTimeoutUs) {
+        return sendRequest(comId, data, destinationAddress, destinationPort, protocol,
+                           sourceUri, destinationUri, perRequestReplyTimeoutUs,
+                           TrdpConstants.DEFAULT_MD_MAX_RETRIES);
+    }
+
+    public CompletableFuture<MdReply> sendRequest(int comId, byte[] data,
+                                                   String destinationAddress, int destinationPort,
+                                                   TransportProtocol protocol,
+                                                   String sourceUri, String destinationUri,
+                                                   long perRequestReplyTimeoutUs,
+                                                   int maxRetries) {
+
+        if (maxRetries < 0 || maxRetries > 2) {
+            CompletableFuture<MdReply> future = new CompletableFuture<>();
+            future.completeExceptionally(new IllegalArgumentException(
+                "maxRetries must be 0..2 per IEC 61375-2-3"));
+            return future;
+        }
 
         if (data.length > TrdpConstants.TRDP_MAX_MD_DATA_SIZE) {
             CompletableFuture<MdReply> future = new CompletableFuture<>();
@@ -148,6 +171,9 @@ public class MdRequester implements AutoCloseable {
         }
 
         long effectiveTimeoutUs = perRequestReplyTimeoutUs > 0 ? perRequestReplyTimeoutUs : this.replyTimeoutUs;
+
+        // TCP has built-in reliability — no retries (IEC 61375-2-3 A.7.8.1)
+        int effectiveRetries = (protocol == TransportProtocol.TCP) ? 0 : maxRetries;
 
         UUID sessionId = UUID.randomUUID();
         int seqNo = sequenceCounter.getAndIncrement();
@@ -183,7 +209,14 @@ public class MdRequester implements AutoCloseable {
             logger.debug("Sent MD request: ComID={}, SessionID={}, Dest={}:{}",
                        comId, sessionId, destinationAddress, destinationPort);
 
-            if (effectiveTimeoutUs > 0) {
+            if (effectiveRetries > 0 && effectiveTimeoutUs > 0) {
+                // Retry-based timeout: resend on timeout, up to maxRetries times
+                RetryContext ctx = new RetryContext(sessionId, comId, data.clone(),
+                    destinationAddress, destinationPort, sourceUri, destinationUri,
+                    effectiveTimeoutUs, effectiveRetries, actualEtbTopoCnt, actualOpTrnTopoCnt);
+                scheduleRetry(ctx);
+            } else if (effectiveTimeoutUs > 0) {
+                // Simple timeout (no retries)
                 long effectiveTimeoutMs = effectiveTimeoutUs / 1000;
                 future.orTimeout(effectiveTimeoutMs, TimeUnit.MILLISECONDS)
                       .whenComplete((reply, ex) -> {
@@ -344,12 +377,14 @@ public class MdRequester implements AutoCloseable {
                 future.complete(reply);
                 pendingSessions.remove(sessionId);
                 tcpSessionTransports.remove(sessionId);
+                cancelRetry(sessionId);
 
             } else if (type == TrdpMessageType.MD_ERROR) {
                 // Me -> Exception
                 future.completeExceptionally(new RuntimeException("TRDP Error received. Status: " + header.getReplyStatus()));
                 pendingSessions.remove(sessionId);
                 tcpSessionTransports.remove(sessionId);
+                cancelRetry(sessionId);
             }
 
         } catch (Exception e) {
@@ -387,6 +422,90 @@ public class MdRequester implements AutoCloseable {
             logger.error("Failed to send MD confirmation", e);
         }
     }
+
+    // --- Retry scheduling (demand-driven, UDP only) ---
+
+    private ScheduledExecutorService createRetryScheduler() {
+        ScheduledThreadPoolExecutor exec = new ScheduledThreadPoolExecutor(1, r -> {
+            Thread t = new Thread(r, "MD-Requester-Retry");
+            t.setDaemon(true);
+            return t;
+        });
+        exec.prestartCoreThread();
+        return exec;
+    }
+
+    private void scheduleRetry(RetryContext ctx) {
+        try {
+            ScheduledFuture<?> scheduledRetry = retryScheduler.schedule(
+                () -> executeRetry(ctx), ctx.perRetryTimeoutUs, TimeUnit.MICROSECONDS);
+            pendingRetries.put(ctx.sessionId, scheduledRetry);
+        } catch (RejectedExecutionException e) {
+            // Scheduler shut down during close()
+        }
+    }
+
+    private void executeRetry(RetryContext ctx) {
+        if (!running) return;
+
+        CompletableFuture<MdReply> future = pendingSessions.get(ctx.sessionId);
+        if (future == null || future.isDone()) {
+            pendingRetries.remove(ctx.sessionId);
+            return;
+        }
+
+        if (ctx.retriesRemaining <= 0) {
+            // All retries exhausted
+            future.completeExceptionally(new TimeoutException(
+                "MD request timed out after all retries: SessionID=" + ctx.sessionId));
+            pendingSessions.remove(ctx.sessionId);
+            pendingRetries.remove(ctx.sessionId);
+            logger.warn("MD request timeout after retries: SessionID={}", ctx.sessionId);
+            return;
+        }
+
+        try {
+            int seqNo = sequenceCounter.getAndIncrement();
+
+            TrdpMdHeader header = new TrdpMdHeader();
+            header.setSequenceCounter(seqNo);
+            header.setMessageType(TrdpMessageType.MD_REQUEST);
+            header.setComId(ctx.comId);
+            header.setSessionId(ctx.sessionId);
+            header.setSourceUri(ctx.sourceUri);
+            header.setDestinationUri(ctx.destinationUri);
+            header.setReplyTimeout((int) ctx.perRetryTimeoutUs);
+            header.setEtbTopoCnt(ctx.etbTopoCnt);
+            header.setOpTrnTopoCnt(ctx.opTrnTopoCnt);
+
+            TrdpPacket packet = new TrdpPacket(header, ctx.data);
+            byte[] encodedPacket = packet.encode();
+
+            udpTransport.send(encodedPacket,
+                InetAddress.getByName(ctx.destinationAddress), ctx.destinationPort);
+
+            ctx.retriesRemaining--;
+            logger.debug("Retried MD request: ComID={}, SessionID={}, retriesRemaining={}",
+                         ctx.comId, ctx.sessionId, ctx.retriesRemaining);
+
+            // Schedule next retry or final timeout
+            scheduleRetry(ctx);
+
+        } catch (IOException e) {
+            future.completeExceptionally(e);
+            pendingSessions.remove(ctx.sessionId);
+            pendingRetries.remove(ctx.sessionId);
+        }
+    }
+
+    private void cancelRetry(UUID sessionId) {
+        ScheduledFuture<?> retry = pendingRetries.remove(sessionId);
+        if (retry != null) {
+            retry.cancel(false);
+        }
+    }
+
+    // --- TCP idle eviction ---
 
     private ScheduledExecutorService createTcpIdleEvictor() {
         ScheduledThreadPoolExecutor exec = new ScheduledThreadPoolExecutor(1, r -> {
@@ -497,10 +616,15 @@ public class MdRequester implements AutoCloseable {
         pendingSessions.clear();
         tcpSessionTransports.clear();
 
-        // 2. Shutdown TCP idle evictor
+        // 2. Cancel pending retries
+        pendingRetries.values().forEach(f -> f.cancel(false));
+        pendingRetries.clear();
+        retryScheduler.shutdownNow();
+
+        // 3. Shutdown TCP idle evictor
         shutdownEvictor();
 
-        // 3. Close all I/O resources first to unblock listener threads
+        // 4. Close all I/O resources first to unblock listener threads
         tcpConnections.values().forEach(transport -> {
             try {
                 transport.close();
@@ -512,7 +636,7 @@ public class MdRequester implements AutoCloseable {
         tcpLastUsedNanos.clear();
         udpTransport.close();
 
-        // 4. Wait for listener threads to finish (should be fast now that sockets are closed)
+        // 5. Wait for listener threads to finish (should be fast now that sockets are closed)
         for (Thread t : listenerThreads) {
             try {
                 t.join(2000);
@@ -524,5 +648,37 @@ public class MdRequester implements AutoCloseable {
         listenerThreads.clear();
 
         logger.info("MD Requester closed");
+    }
+
+    private static class RetryContext {
+        final UUID sessionId;
+        final int comId;
+        final byte[] data;
+        final String destinationAddress;
+        final int destinationPort;
+        final String sourceUri;
+        final String destinationUri;
+        final long perRetryTimeoutUs;
+        final int etbTopoCnt;
+        final int opTrnTopoCnt;
+        int retriesRemaining;
+
+        RetryContext(UUID sessionId, int comId, byte[] data,
+                     String destinationAddress, int destinationPort,
+                     String sourceUri, String destinationUri,
+                     long perRetryTimeoutUs, int maxRetries,
+                     int etbTopoCnt, int opTrnTopoCnt) {
+            this.sessionId = sessionId;
+            this.comId = comId;
+            this.data = data;
+            this.destinationAddress = destinationAddress;
+            this.destinationPort = destinationPort;
+            this.sourceUri = sourceUri;
+            this.destinationUri = destinationUri;
+            this.perRetryTimeoutUs = perRetryTimeoutUs;
+            this.retriesRemaining = maxRetries;
+            this.etbTopoCnt = etbTopoCnt;
+            this.opTrnTopoCnt = opTrnTopoCnt;
+        }
     }
 }

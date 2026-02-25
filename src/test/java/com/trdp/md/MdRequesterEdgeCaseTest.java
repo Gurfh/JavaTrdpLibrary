@@ -160,13 +160,13 @@ class MdRequesterEdgeCaseTest {
 
     @Test
     void testRequestTimeout() throws Exception {
-        requester = new MdRequester(0);
+        requester = new MdRequester(0, 200_000); // 200ms reply timeout
 
         CompletableFuture<MdReply> future = requester.sendRequest(
             4000, "timeout".getBytes(), "127.0.0.1", 19805);
 
-        // Default timeout is 5000ms, so wait slightly more
-        assertThatThrownBy(() -> future.get(6, TimeUnit.SECONDS))
+        // Default retries=2, so total timeout is ~600ms (3 × 200ms)
+        assertThatThrownBy(() -> future.get(3, TimeUnit.SECONDS))
             .isInstanceOf(java.util.concurrent.ExecutionException.class);
     }
 }

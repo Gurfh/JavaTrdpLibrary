@@ -187,10 +187,21 @@ The simplest way to pull data is using the `PdSubscriber` to send the request. T
 
 ```java
 import com.trdp.pd.PdSubscriber;
+import com.trdp.pd.PdEvent;
+import com.trdp.pd.PdEventListener;
 
 try (PdSubscriber subscriber = new PdSubscriber(1000, "0.0.0.0", 17224)) {
-    subscriber.addListener((comId, data, seq) -> {
-        System.out.println("Received Pull Reply: " + new String(data));
+    subscriber.addListener(new PdEventListener() {
+        @Override
+        public void onData(PdEvent event) {
+            System.out.println("Received Pull Reply: " + new String(event.getData()));
+        }
+
+        @Override
+        public void onTimeout(PdEvent event) { }
+
+        @Override
+        public void onValidityRestored(PdEvent event) { }
     });
     subscriber.start();
 
@@ -247,7 +258,7 @@ import com.trdp.md.MdReply;
 import com.trdp.md.TransportProtocol;
 import java.util.concurrent.CompletableFuture;
 
-// Create a requester
+// Create a requester (default 5s reply timeout, 60s connect timeout)
 try (MdRequester requester = new MdRequester(17225)) {
     // Send a UDP request (default)
     byte[] requestData = "Request Data".getBytes();
@@ -257,7 +268,7 @@ try (MdRequester requester = new MdRequester(17225)) {
         "192.168.1.100",        // Destination IP
         17226                    // Destination port
     );
-    
+
     // Wait for reply
     MdReply reply = future.get();
     System.out.println("Reply data: " + new String(reply.getData()));
@@ -273,6 +284,16 @@ try (MdRequester requester = new MdRequester(17225)) {
 
     MdReply tcpReply = tcpFuture.get();
     System.out.println("TCP Reply: " + new String(tcpReply.getData()));
+}
+
+// Custom timeouts: 2s reply timeout, 30s connect/idle timeout
+try (MdRequester requester = new MdRequester(17225, 2_000_000, 30_000_000)) {
+    // Per-request timeout override (500ms for this request only)
+    CompletableFuture<MdReply> future = requester.sendRequest(
+        2000, "data".getBytes(), "192.168.1.100", 17226,
+        TransportProtocol.UDP, null, null, 500_000);
+
+    MdReply reply = future.get();
 }
 ```
 
@@ -290,12 +311,18 @@ MdRequestHandler handler = (request) -> {
     return new MdResponse("Reply Data".getBytes());
 };
 
-// Create a replier
+// Create a replier (default 1s confirm timeout)
 try (MdReplier replier = new MdReplier(17226, handler)) {
     // Start listening for requests
     replier.start();
-    
+
     // Keep running to handle requests
+    Thread.sleep(60000);
+}
+
+// Custom confirm timeout (3s)
+try (MdReplier replier = new MdReplier(17226, handler, 3_000_000)) {
+    replier.start();
     Thread.sleep(60000);
 }
 ```
@@ -309,6 +336,8 @@ import com.trdp.util.TrdpDataset;
 import com.trdp.util.TrdpDataType;
 import com.trdp.pd.PdPublisher;
 import com.trdp.pd.PdSubscriber;
+import com.trdp.pd.PdEvent;
+import com.trdp.pd.PdEventListener;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
@@ -345,15 +374,24 @@ List<TrdpDataset.FieldDefinition> schema = Arrays.asList(
 );
 
 try (PdSubscriber subscriber = new PdSubscriber(3000, "239.255.0.1", 19200)) {
-    subscriber.addListener((comId, data, seqNo) -> {
-        TrdpDataset decoded = TrdpDataset.decode(data, schema);
-        
-        int trainId = (int) decoded.getValue("trainId");
-        float speed = (float) decoded.getValue("speed");
-        boolean doorsClosed = (boolean) decoded.getValue("doorsClosed");
-        
-        System.out.println("Train " + trainId + " at " + speed + " km/h");
-        System.out.println("Doors closed: " + doorsClosed);
+    subscriber.addListener(new PdEventListener() {
+        @Override
+        public void onData(PdEvent event) {
+            TrdpDataset decoded = TrdpDataset.decode(event.getData(), schema);
+
+            int trainId = (int) decoded.getValue("trainId");
+            float speed = (float) decoded.getValue("speed");
+            boolean doorsClosed = (boolean) decoded.getValue("doorsClosed");
+
+            System.out.println("Train " + trainId + " at " + speed + " km/h");
+            System.out.println("Doors closed: " + doorsClosed);
+        }
+
+        @Override
+        public void onTimeout(PdEvent event) { }
+
+        @Override
+        public void onValidityRestored(PdEvent event) { }
     });
     
     subscriber.start();

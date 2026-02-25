@@ -34,6 +34,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
 
 - **Message Data (MD) Support**
   - Request/Reply pattern over UDP and TCP
+  - UDP automatic retries with configurable maxRetries (0..2, default 2 per IEC 61375-2-3)
   - TCP confirmation (Mc) sent on the same connection as the request
   - Asynchronous communication with CompletableFuture
   - Configurable request handlers
@@ -41,7 +42,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Proper reply routing with ReplyComId and ReplyIpAddress
 
 - **Production-Ready Features**
-  - Comprehensive unit and integration tests (290+ tests)
+  - Comprehensive unit and integration tests (300+ tests)
   - Thread-safe implementation
   - Proper resource management with AutoCloseable
   - SLF4J logging integration
@@ -296,6 +297,20 @@ try (MdRequester requester = new MdRequester(17225, 2_000_000, 30_000_000)) {
 
     MdReply reply = future.get();
 }
+
+// UDP retries: default is 2 retries (3 total attempts per IEC 61375-2-3)
+// Each retry reuses the same session UUID with an incremented sequence counter
+try (MdRequester requester = new MdRequester(17225, 1_000_000)) {
+    // Explicit retry control: 1 retry (2 total attempts), total timeout = 2s
+    CompletableFuture<MdReply> future = requester.sendRequest(
+        2000, "data".getBytes(), "192.168.1.100", 17226,
+        TransportProtocol.UDP, null, null, 0, 1);
+
+    // Disable retries for a specific request
+    CompletableFuture<MdReply> noRetry = requester.sendRequest(
+        2000, "data".getBytes(), "192.168.1.100", 17226,
+        TransportProtocol.UDP, null, null, 0, 0);
+}
 ```
 
 #### Creating a Replier
@@ -508,6 +523,7 @@ The library supports the following TRDP message types:
 - Default MD Reply Timeout: 5s (5,000,000μs)
 - Default MD Confirm Timeout: 1s (1,000,000μs)
 - Default MD Connect Timeout: 60s (60,000,000μs)
+- Default MD Max Retries: 2 (UDP only, per IEC 61375-2-3 Table A.19)
 - Maximum PD Data Size: 1432 bytes
 - Maximum MD Data Size: 1400 bytes
 

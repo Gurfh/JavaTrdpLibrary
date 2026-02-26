@@ -19,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class PdPublisher implements AutoCloseable {
@@ -30,6 +31,9 @@ public class PdPublisher implements AutoCloseable {
     private final int destinationPort;
     private final long intervalUs;
     private final AtomicInteger sequenceCounter;
+
+    private final AtomicLong packetsSent = new AtomicLong(0);
+    private final AtomicLong sendErrors = new AtomicLong(0);
 
     // Pull Pattern Support
     private final AtomicReference<byte[]> currentData;
@@ -139,6 +143,7 @@ public class PdPublisher implements AutoCloseable {
         try {
             sendPd(data, destinationAddress, destinationPort, TrdpMessageType.PD, 0);
         } catch (IOException e) {
+            sendErrors.incrementAndGet();
             logger.error("Cyclic PD send failed for ComID {}", comId, e);
         }
     }
@@ -163,7 +168,8 @@ public class PdPublisher implements AutoCloseable {
         byte[] encodedPacket = packet.encode();
         
         transport.send(encodedPacket, destAddr, destPort);
-        logger.debug("Sent PD message ({}) to {}:{}: ComID={}, SeqNo={}, Size={}", 
+        packetsSent.incrementAndGet();
+        logger.debug("Sent PD message ({}) to {}:{}: ComID={}, SeqNo={}, Size={}",
                     type, destAddr.getHostAddress(), destPort, header.getComId(), header.getSequenceCounter(), data.length);
     }
 
@@ -216,10 +222,24 @@ public class PdPublisher implements AutoCloseable {
                 sendPd(currentData.get(), replyAddr, replyPort, TrdpMessageType.PD_REPLY, replyComId);
             }
         } catch (Exception e) {
+            sendErrors.incrementAndGet();
             logger.error("Failed to process incoming PD packet in Publisher", e);
         }
     }
     
+    public long getPacketsSent() {
+        return packetsSent.get();
+    }
+
+    public long getSendErrors() {
+        return sendErrors.get();
+    }
+
+    public void resetStatistics() {
+        packetsSent.set(0);
+        sendErrors.set(0);
+    }
+
     @Override
     public void close() {
         running = false;

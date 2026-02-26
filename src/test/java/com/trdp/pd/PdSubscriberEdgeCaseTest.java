@@ -525,6 +525,119 @@ class PdSubscriberEdgeCaseTest {
     }
 
     @Test
+    void testPacketsReceivedCounter() throws Exception {
+        int comId = 8020;
+        int port = 19730;
+        int packetCount = 5;
+
+        CountDownLatch latch = new CountDownLatch(packetCount);
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port, 0);
+        subscriber.addListener(dataOnly(event -> latch.countDown()));
+        subscriber.start();
+
+        Thread.sleep(200);
+
+        sender = new UdpTransport(0);
+        for (int i = 0; i < packetCount; i++) {
+            TrdpPdHeader header = new TrdpPdHeader();
+            header.setSequenceCounter(i);
+            header.setMessageType(TrdpMessageType.PD);
+            header.setComId(comId);
+            header.setDatasetLength(1);
+            TrdpPacket packet = new TrdpPacket(header, new byte[]{(byte) i});
+            sender.send(packet.encode(), InetAddress.getLoopbackAddress(), port);
+        }
+
+        boolean done = latch.await(3, TimeUnit.SECONDS);
+        assertThat(done).isTrue();
+        assertThat(subscriber.getPacketsReceived()).isEqualTo(packetCount);
+    }
+
+    @Test
+    void testTimeoutCountIncrements() throws Exception {
+        int comId = 8021;
+        int port = 19731;
+        long timeoutUs = 50_000; // 50ms
+
+        CountDownLatch firstTimeout = new CountDownLatch(1);
+        CountDownLatch secondTimeout = new CountDownLatch(2);
+        CountDownLatch restoredLatch = new CountDownLatch(1);
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port, timeoutUs);
+        subscriber.addListener(new PdEventListener() {
+            @Override public void onData(PdEvent event) {}
+            @Override public void onTimeout(PdEvent event) {
+                firstTimeout.countDown();
+                secondTimeout.countDown();
+            }
+            @Override public void onValidityRestored(PdEvent event) { restoredLatch.countDown(); }
+        });
+        subscriber.start();
+
+        // Wait for first timeout
+        assertThat(firstTimeout.await(1, TimeUnit.SECONDS)).isTrue();
+        assertThat(subscriber.getTimeoutCount()).isEqualTo(1);
+
+        // Send a valid packet to restore validity
+        sender = new UdpTransport(0);
+        TrdpPdHeader header = new TrdpPdHeader();
+        header.setSequenceCounter(0);
+        header.setMessageType(TrdpMessageType.PD);
+        header.setComId(comId);
+        header.setDatasetLength(1);
+        TrdpPacket packet = new TrdpPacket(header, new byte[]{1});
+        sender.send(packet.encode(), InetAddress.getLoopbackAddress(), port);
+
+        assertThat(restoredLatch.await(1, TimeUnit.SECONDS)).isTrue();
+
+        // Wait for second timeout
+        assertThat(secondTimeout.await(1, TimeUnit.SECONDS)).isTrue();
+        assertThat(subscriber.getTimeoutCount()).isEqualTo(2);
+    }
+
+    @Test
+    void testResetStatisticsIncludesNewCounters() throws Exception {
+        int comId = 8022;
+        int port = 19732;
+        long timeoutUs = 50_000; // 50ms
+
+        CountDownLatch timeoutLatch = new CountDownLatch(1);
+        CountDownLatch dataLatch = new CountDownLatch(1);
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port, timeoutUs);
+        subscriber.addListener(new PdEventListener() {
+            @Override public void onData(PdEvent event) { dataLatch.countDown(); }
+            @Override public void onTimeout(PdEvent event) { timeoutLatch.countDown(); }
+            @Override public void onValidityRestored(PdEvent event) {}
+        });
+        subscriber.start();
+
+        // Wait for timeout to increment timeoutCount
+        assertThat(timeoutLatch.await(1, TimeUnit.SECONDS)).isTrue();
+
+        // Send a valid packet to increment packetsReceived
+        sender = new UdpTransport(0);
+        TrdpPdHeader header = new TrdpPdHeader();
+        header.setSequenceCounter(0);
+        header.setMessageType(TrdpMessageType.PD);
+        header.setComId(comId);
+        header.setDatasetLength(1);
+        TrdpPacket packet = new TrdpPacket(header, new byte[]{1});
+        sender.send(packet.encode(), InetAddress.getLoopbackAddress(), port);
+
+        assertThat(dataLatch.await(1, TimeUnit.SECONDS)).isTrue();
+
+        assertThat(subscriber.getPacketsReceived()).isGreaterThan(0);
+        assertThat(subscriber.getTimeoutCount()).isGreaterThan(0);
+
+        subscriber.resetStatistics();
+
+        assertThat(subscriber.getPacketsReceived()).isZero();
+        assertThat(subscriber.getTimeoutCount()).isZero();
+    }
+
+    @Test
     void testEventSourceAddressPopulated() throws Exception {
         int comId = 8010;
         int port = 19712;

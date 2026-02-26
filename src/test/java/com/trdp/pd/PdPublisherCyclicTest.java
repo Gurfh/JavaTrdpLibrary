@@ -155,6 +155,28 @@ class PdPublisherCyclicTest {
     }
 
     @Test
+    void testCyclicSendCountsPackets() throws Exception {
+        int port = 19405;
+        long intervalUs = 50_000; // 50ms
+        receiver = new UdpTransport(port);
+        publisher = new PdPublisher(1000, "127.0.0.1", port, 0, intervalUs);
+
+        publisher.putData(new byte[]{1, 2, 3});
+        publisher.start();
+
+        // Wait ~250ms, expect at least 3 cyclic sends
+        byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
+        long deadline = System.currentTimeMillis() + 350;
+        while (System.currentTimeMillis() < deadline) {
+            receiver.receive(buffer, 100);
+        }
+
+        assertThat(publisher.getPacketsSent())
+                .as("packetsSent should count cyclic sends")
+                .isGreaterThanOrEqualTo(3);
+    }
+
+    @Test
     void testConstructorRejectsNegativeInterval() {
         assertThatThrownBy(() ->
             new PdPublisher(1000, "127.0.0.1", 17224, 0, -1)

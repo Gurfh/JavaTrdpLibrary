@@ -397,6 +397,7 @@ public class TrdpPdSession implements AutoCloseable {
             return;
         }
 
+        entry.packetsReceived.incrementAndGet();
         entry.lastReceivedTimeNanos = System.nanoTime();
         entry.lastSourceAddress = received.getSourceAddress();
 
@@ -472,6 +473,7 @@ public class TrdpPdSession implements AutoCloseable {
                     long elapsedUs = (now - entry.lastReceivedTimeNanos) / 1000;
                     if (elapsedUs > entry.timeoutUs) {
                         entry.timedOut = true;
+                        entry.timeoutCount.incrementAndGet();
                         entry.lastSequenceCounters.clear();
                         PdEvent event = new PdEvent(PdEvent.Type.TIMEOUT, entry.comId, null, 0,
                                 entry.lastSourceAddress, null, 0, 0, 1);
@@ -507,6 +509,7 @@ public class TrdpPdSession implements AutoCloseable {
             sendPd(pub, pub.currentData.get(), replyAddr, replyPort,
                     TrdpMessageType.PD_REPLY, replyComId);
         } catch (Exception e) {
+            pub.sendErrors.incrementAndGet();
             logger.error("PD Session: error handling pull request for ComID {}", pub.comId, e);
         }
     }
@@ -520,6 +523,7 @@ public class TrdpPdSession implements AutoCloseable {
             sendPd(entry, data, entry.destinationAddress, entry.destinationPort,
                     TrdpMessageType.PD, 0);
         } catch (IOException e) {
+            entry.sendErrors.incrementAndGet();
             logger.error("PD Session: cyclic send failed for ComID {}", entry.comId, e);
         }
     }
@@ -539,6 +543,7 @@ public class TrdpPdSession implements AutoCloseable {
         byte[] encodedPacket = packet.encode();
 
         transport.send(encodedPacket, destAddr, destPort);
+        entry.packetsSent.incrementAndGet();
         logger.debug("PD Session sent {} to {}:{}: ComID={}, SeqNo={}, Size={}",
                 type, destAddr.getHostAddress(), destPort,
                 header.getComId(), header.getSequenceCounter(), data.length);
@@ -554,6 +559,8 @@ public class TrdpPdSession implements AutoCloseable {
         final AtomicInteger sequenceCounter = new AtomicInteger(0);
         final AtomicReference<byte[]> currentData = new AtomicReference<>(new byte[0]);
         volatile ScheduledFuture<?> cyclicTask;
+        final AtomicLong packetsSent = new AtomicLong();
+        final AtomicLong sendErrors = new AtomicLong();
 
         PublisherEntry(int comId, InetAddress destinationAddress, int destinationPort, long intervalUs) {
             this.comId = comId;
@@ -586,6 +593,22 @@ public class TrdpPdSession implements AutoCloseable {
         public long getIntervalUs() {
             return intervalUs;
         }
+
+        @Override
+        public long getPacketsSent() {
+            return packetsSent.get();
+        }
+
+        @Override
+        public long getSendErrors() {
+            return sendErrors.get();
+        }
+
+        @Override
+        public void resetStatistics() {
+            packetsSent.set(0);
+            sendErrors.set(0);
+        }
     }
 
     private static class SubscriberEntry implements PdSubscriberHandle {
@@ -601,6 +624,8 @@ public class TrdpPdSession implements AutoCloseable {
         final AtomicLong missedCount = new AtomicLong();
         final AtomicLong duplicateCount = new AtomicLong();
         final AtomicLong topoErrorCount = new AtomicLong();
+        final AtomicLong packetsReceived = new AtomicLong();
+        final AtomicLong timeoutCount = new AtomicLong();
 
         SubscriberEntry(int comId, long timeoutUs, PdEventListener listener) {
             this.comId = comId;
@@ -634,10 +659,22 @@ public class TrdpPdSession implements AutoCloseable {
         }
 
         @Override
+        public long getPacketsReceived() {
+            return packetsReceived.get();
+        }
+
+        @Override
+        public long getTimeoutCount() {
+            return timeoutCount.get();
+        }
+
+        @Override
         public void resetStatistics() {
             missedCount.set(0);
             duplicateCount.set(0);
             topoErrorCount.set(0);
+            packetsReceived.set(0);
+            timeoutCount.set(0);
         }
     }
 }

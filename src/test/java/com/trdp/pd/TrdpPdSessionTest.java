@@ -216,6 +216,119 @@ class TrdpPdSessionTest {
                 .doesNotThrowAnyException();
     }
 
+    // --- Statistics tests ---
+
+    @Test
+    void testPublisherStatistics() throws Exception {
+        UdpTransport receiver = new UdpTransport(19130);
+        try {
+            session = new TrdpPdSession(0);
+            PdPublisherHandle handle = session.addPublisher(1000, "127.0.0.1", 19130, 0);
+            session.start();
+
+            assertThat(handle.getPacketsSent()).isZero();
+            assertThat(handle.getSendErrors()).isZero();
+
+            handle.putDataImmediate("data1".getBytes());
+            assertThat(handle.getPacketsSent()).isEqualTo(1);
+
+            handle.putDataImmediate("data2".getBytes());
+            assertThat(handle.getPacketsSent()).isEqualTo(2);
+
+            handle.resetStatistics();
+            assertThat(handle.getPacketsSent()).isZero();
+            assertThat(handle.getSendErrors()).isZero();
+        } finally {
+            receiver.close();
+        }
+    }
+
+    @Test
+    void testSubscriberPacketsReceivedCounter() throws Exception {
+        int port = 19131;
+        int comId = 3000;
+        int packetCount = 3;
+
+        CountDownLatch latch = new CountDownLatch(packetCount);
+        PdEventListener listener = new PdEventListener() {
+            @Override public void onData(PdEvent event) { latch.countDown(); }
+            @Override public void onTimeout(PdEvent event) {}
+            @Override public void onValidityRestored(PdEvent event) {}
+        };
+
+        session = new TrdpPdSession(port);
+        PdSubscriberHandle handle = session.addSubscriber(comId, null, 0, listener);
+        session.start();
+
+        Thread.sleep(200);
+
+        UdpTransport sender = new UdpTransport(0);
+        try {
+            for (int i = 0; i < packetCount; i++) {
+                TrdpPdHeader header = new TrdpPdHeader();
+                header.setSequenceCounter(i);
+                header.setMessageType(TrdpMessageType.PD);
+                header.setComId(comId);
+                header.setDatasetLength(1);
+                TrdpPacket packet = new TrdpPacket(header, new byte[]{(byte) i});
+                sender.send(packet.encode(), InetAddress.getByName("127.0.0.1"), port);
+            }
+
+            assertThat(latch.await(3, TimeUnit.SECONDS)).isTrue();
+            assertThat(handle.getPacketsReceived()).isEqualTo(packetCount);
+        } finally {
+            sender.close();
+        }
+    }
+
+    @Test
+    void testSubscriberTimeoutCounter() throws Exception {
+        int port = 19132;
+        int comId = 3001;
+        long timeoutUs = 50_000; // 50ms
+
+        CountDownLatch firstTimeout = new CountDownLatch(1);
+        CountDownLatch secondTimeout = new CountDownLatch(2);
+        CountDownLatch restoredLatch = new CountDownLatch(1);
+
+        PdEventListener listener = new PdEventListener() {
+            @Override public void onData(PdEvent event) {}
+            @Override public void onTimeout(PdEvent event) {
+                firstTimeout.countDown();
+                secondTimeout.countDown();
+            }
+            @Override public void onValidityRestored(PdEvent event) { restoredLatch.countDown(); }
+        };
+
+        session = new TrdpPdSession(port);
+        PdSubscriberHandle handle = session.addSubscriber(comId, null, timeoutUs, listener);
+        session.start();
+
+        // Wait for first timeout
+        assertThat(firstTimeout.await(1, TimeUnit.SECONDS)).isTrue();
+        assertThat(handle.getTimeoutCount()).isEqualTo(1);
+
+        // Send a valid packet to restore validity
+        UdpTransport sender = new UdpTransport(0);
+        try {
+            TrdpPdHeader header = new TrdpPdHeader();
+            header.setSequenceCounter(0);
+            header.setMessageType(TrdpMessageType.PD);
+            header.setComId(comId);
+            header.setDatasetLength(1);
+            TrdpPacket packet = new TrdpPacket(header, new byte[]{1});
+            sender.send(packet.encode(), InetAddress.getByName("127.0.0.1"), port);
+
+            assertThat(restoredLatch.await(1, TimeUnit.SECONDS)).isTrue();
+
+            // Wait for second timeout
+            assertThat(secondTimeout.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(handle.getTimeoutCount()).isEqualTo(2);
+        } finally {
+            sender.close();
+        }
+    }
+
     // --- Traffic shaping tests ---
 
     @Test

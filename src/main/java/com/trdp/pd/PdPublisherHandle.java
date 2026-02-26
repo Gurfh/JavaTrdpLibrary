@@ -37,4 +37,19 @@ public interface PdPublisherHandle {
      * Returns the cyclic send interval in microseconds. 0 means no cyclic send.
      */
     long getIntervalUs();
+
+    /**
+     * Returns the number of packets successfully sent.
+     */
+    long getPacketsSent();
+
+    /**
+     * Returns the number of send errors encountered.
+     */
+    long getSendErrors();
+
+    /**
+     * Resets all statistics counters to zero.
+     */
+    void resetStatistics();
 }

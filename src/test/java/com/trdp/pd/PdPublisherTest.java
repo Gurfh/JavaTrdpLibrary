@@ -32,6 +32,29 @@ class PdPublisherTest {
     }
     
     @Test
+    void testPacketsSentCounter() throws IOException {
+        publisher = new PdPublisher(1000, "127.0.0.1", 17224);
+
+        publisher.putDataImmediate("Test Data".getBytes());
+        assertThat(publisher.getPacketsSent()).isEqualTo(1);
+
+        publisher.putDataImmediate("More Data".getBytes());
+        assertThat(publisher.getPacketsSent()).isEqualTo(2);
+    }
+
+    @Test
+    void testResetStatistics() throws IOException {
+        publisher = new PdPublisher(1000, "127.0.0.1", 17224);
+
+        publisher.putDataImmediate("Test Data".getBytes());
+        assertThat(publisher.getPacketsSent()).isEqualTo(1);
+
+        publisher.resetStatistics();
+        assertThat(publisher.getPacketsSent()).isZero();
+        assertThat(publisher.getSendErrors()).isZero();
+    }
+
+    @Test
     void testPublishOversizedData() throws IOException {
         publisher = new PdPublisher(1000, "127.0.0.1", 17224);
         

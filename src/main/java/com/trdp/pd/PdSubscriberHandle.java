@@ -32,6 +32,16 @@ public interface PdSubscriberHandle {
     long getTopoErrorCount();
 
     /**
+     * Returns the number of valid packets received (after topology check, matching ComID).
+     */
+    long getPacketsReceived();
+
+    /**
+     * Returns the number of times this subscriber has timed out.
+     */
+    long getTimeoutCount();
+
+    /**
      * Resets all statistics counters to zero.
      */
     void resetStatistics();

@@ -23,6 +23,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
 - **Process Data (PD) Support**
   - Publisher/Subscriber pattern (Push)
   - Requester/Replier pattern (Pull)
+  - High-performance session manager (`TrdpPdSession`) with shared socket and thread pool
   - Cyclic auto-retransmission with configurable interval
   - Immediate out-of-cycle send
   - UDP multicast and unicast communication
@@ -249,6 +250,73 @@ try (PdRequester requester = new PdRequester(0)) { // 0 = ephemeral port
 }
 
 ```
+
+### Process Data (PD) - High-Performance Session
+
+For applications managing many concurrent ComIds, `TrdpPdSession` consolidates all publishers and subscribers onto a single shared UDP socket with minimal threads. This reduces resource usage from ~2N+M threads and N+M sockets to just 2 threads and 1 socket.
+
+```java
+import com.trdp.pd.TrdpPdSession;
+import com.trdp.pd.PdPublisherHandle;
+import com.trdp.pd.PdSubscriberHandle;
+import com.trdp.pd.PdEvent;
+import com.trdp.pd.PdEventListener;
+
+// Create a session on the standard PD port
+try (TrdpPdSession session = new TrdpPdSession(17224)) {
+    // Register publishers and subscribers before starting
+    PdPublisherHandle pub = session.addPublisher(
+        1000,            // ComID
+        "239.255.0.1",   // Destination address
+        17224,           // Destination port
+        100_000          // Cyclic interval (100ms), 0 for no cyclic
+    );
+
+    PdSubscriberHandle sub = session.addSubscriber(
+        2000,            // ComID
+        "239.255.0.1",   // Multicast group to join (null for unicast)
+        100_000,         // Timeout in microseconds (0 to disable)
+        new PdEventListener() {
+            @Override
+            public void onData(PdEvent event) {
+                System.out.println("Received ComID " + event.getComId());
+            }
+
+            @Override
+            public void onTimeout(PdEvent event) {
+                System.out.println("Timeout for ComID " + event.getComId());
+            }
+
+            @Override
+            public void onValidityRestored(PdEvent event) {
+                System.out.println("Validity restored for ComID " + event.getComId());
+            }
+        }
+    );
+
+    // Optional: set topology counters (session-wide)
+    session.setTopologyCounters(1, 1);
+
+    // Start the session (no more registrations allowed after this)
+    session.start();
+
+    // Stage data for cyclic transmission
+    pub.putData("Cyclic payload".getBytes());
+
+    // Or send immediately
+    pub.putDataImmediate("Urgent data".getBytes());
+
+    // Query subscriber state
+    if (sub.isTimedOut()) {
+        System.out.println("No data received");
+    }
+    System.out.println("Missed packets: " + sub.getMissedCount());
+
+    Thread.sleep(60000);
+}
+```
+
+The individual `PdPublisher` and `PdSubscriber` classes remain available for simple single-ComId use cases.
 
 ### Message Data (MD) - Request/Reply
 
@@ -537,11 +605,14 @@ com.trdp
 │   ├── TrdpMessageType # Message type enumeration
 │   └── TrdpConstants   # Protocol constants
 ├── pd               # Process Data components
-│   ├── PdPublisher     # PD publisher implementation
-│   ├── PdSubscriber    # PD subscriber implementation
-│   ├── PdRequester     # PD requester implementation
-│   ├── PdEvent         # Immutable PD event object
-│   └── PdEventListener # PD event listener interface
+│   ├── TrdpPdSession    # High-performance shared-socket session manager
+│   ├── PdPublisher      # PD publisher (single ComId)
+│   ├── PdSubscriber     # PD subscriber (single ComId)
+│   ├── PdRequester      # PD requester implementation
+│   ├── PdPublisherHandle  # Publisher handle interface (session)
+│   ├── PdSubscriberHandle # Subscriber handle interface (session)
+│   ├── PdEvent          # Immutable PD event object
+│   └── PdEventListener  # PD event listener interface
 ├── md               # Message Data components
 │   ├── MdRequester     # MD requester implementation
 │   ├── MdReplier       # MD replier implementation
@@ -635,7 +706,9 @@ try (PdPublisher publisher = new PdPublisher(1000, "239.255.0.1", 17224)) {
 
 ## Performance Considerations
 
-- PD publishers and subscribers use separate threads for network I/O
+- `TrdpPdSession` consolidates many publishers/subscribers onto a shared socket with 2 threads (vs ~2N+M threads and N+M sockets with individual instances)
+- Single packet decode per receive with O(1) ComId dispatch via HashMap
+- Individual PD publishers and subscribers use separate threads for network I/O (simpler for single-ComId use)
 - MD requesters use asynchronous futures for non-blocking operations
 - Multicast is used for efficient PD distribution
 - Configurable timeouts for all communication patterns

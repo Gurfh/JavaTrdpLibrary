@@ -9,6 +9,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetAddress;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -212,6 +214,109 @@ class TrdpPdSessionTest {
         // Should not throw
         assertThatCode(() -> session.setTopologyCounters(42, 7))
                 .doesNotThrowAnyException();
+    }
+
+    // --- Traffic shaping tests ---
+
+    @Test
+    void testTrafficShapingEnabledByDefault() throws Exception {
+        session = new TrdpPdSession(19120);
+        assertThat(session.isTrafficShapingEnabled()).isTrue();
+    }
+
+    @Test
+    void testSetTrafficShapingDisabled() throws Exception {
+        session = new TrdpPdSession(19121);
+        session.setTrafficShapingEnabled(false);
+        assertThat(session.isTrafficShapingEnabled()).isFalse();
+    }
+
+    @Test
+    void testSetTrafficShapingAfterStartThrows() throws Exception {
+        session = new TrdpPdSession(19122);
+        session.start();
+
+        assertThatThrownBy(() -> session.setTrafficShapingEnabled(false))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void testStaggeredDelaysTenPublishersSameInterval() throws Exception {
+        session = new TrdpPdSession(19123);
+        for (int i = 0; i < 10; i++) {
+            session.addPublisher(1000 + i, "127.0.0.1", 17224, 10_000);
+        }
+
+        Map<Integer, Long> delays = session.computeInitialDelays();
+        assertThat(delays).hasSize(10);
+
+        // offset = 10_000 / 10 = 1_000us per publisher
+        List<Long> sortedDelays = delays.values().stream().sorted().toList();
+        assertThat(sortedDelays).containsExactly(
+                0L, 1000L, 2000L, 3000L, 4000L, 5000L, 6000L, 7000L, 8000L, 9000L);
+    }
+
+    @Test
+    void testStaggeredDelaysSinglePublisherUnchanged() throws Exception {
+        session = new TrdpPdSession(19124);
+        session.addPublisher(1000, "127.0.0.1", 17224, 50_000);
+
+        Map<Integer, Long> delays = session.computeInitialDelays();
+        // Single publisher: offset = 50_000, 2 * 50_000 > 50_000 → no stagger
+        assertThat(delays).containsEntry(1000, 50_000L);
+    }
+
+    @Test
+    void testStaggeredDelaysDifferentIntervalsIndependent() throws Exception {
+        session = new TrdpPdSession(19125);
+        // Group 1: 2 publishers at 100_000us
+        session.addPublisher(1000, "127.0.0.1", 17224, 100_000);
+        session.addPublisher(1001, "127.0.0.1", 17224, 100_000);
+        // Group 2: 2 publishers at 200_000us
+        session.addPublisher(2000, "127.0.0.1", 17224, 200_000);
+        session.addPublisher(2001, "127.0.0.1", 17224, 200_000);
+
+        Map<Integer, Long> delays = session.computeInitialDelays();
+
+        // Group 1: offset = 50_000. Delays: 0, 50_000
+        List<Long> group1Delays = delays.entrySet().stream()
+                .filter(e -> e.getKey() >= 1000 && e.getKey() < 2000)
+                .map(Map.Entry::getValue)
+                .sorted()
+                .toList();
+        assertThat(group1Delays).containsExactly(0L, 50_000L);
+
+        // Group 2: offset = 100_000. Delays: 0, 100_000
+        List<Long> group2Delays = delays.entrySet().stream()
+                .filter(e -> e.getKey() >= 2000)
+                .map(Map.Entry::getValue)
+                .sorted()
+                .toList();
+        assertThat(group2Delays).containsExactly(0L, 100_000L);
+    }
+
+    @Test
+    void testStaggeredDelaysDisabled() throws Exception {
+        session = new TrdpPdSession(19126);
+        session.setTrafficShapingEnabled(false);
+        session.addPublisher(1000, "127.0.0.1", 17224, 100_000);
+        session.addPublisher(1001, "127.0.0.1", 17224, 100_000);
+
+        Map<Integer, Long> delays = session.computeInitialDelays();
+        // All delays should equal the interval (no stagger)
+        assertThat(delays.values()).allMatch(d -> d == 100_000L);
+    }
+
+    @Test
+    void testNonCyclicPublishersExcludedFromDelays() throws Exception {
+        session = new TrdpPdSession(19127);
+        session.addPublisher(1000, "127.0.0.1", 17224, 0);       // non-cyclic
+        session.addPublisher(1001, "127.0.0.1", 17224, 100_000);  // cyclic
+
+        Map<Integer, Long> delays = session.computeInitialDelays();
+        assertThat(delays).hasSize(1);
+        assertThat(delays).containsKey(1001);
+        assertThat(delays).doesNotContainKey(1000);
     }
 
     private static Set<String> findThreadsByPrefix(String prefix) {

@@ -24,6 +24,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Publisher/Subscriber pattern (Push)
   - Requester/Replier pattern (Pull)
   - High-performance session manager (`TrdpPdSession`) with shared socket and thread pool
+  - Traffic shaping: staggered initial delays prevent network bursts when many publishers share the same interval
   - Cyclic auto-retransmission with configurable interval
   - Immediate out-of-cycle send
   - UDP multicast and unicast communication
@@ -296,6 +297,11 @@ try (TrdpPdSession session = new TrdpPdSession(17224)) {
 
     // Optional: set topology counters (session-wide)
     session.setTopologyCounters(1, 1);
+
+    // Optional: traffic shaping is enabled by default, staggering cyclic
+    // publishers with the same interval to prevent network bursts.
+    // Disable if you need all publishers to fire simultaneously:
+    // session.setTrafficShapingEnabled(false);
 
     // Start the session (no more registrations allowed after this)
     session.start();
@@ -707,6 +713,7 @@ try (PdPublisher publisher = new PdPublisher(1000, "239.255.0.1", 17224)) {
 ## Performance Considerations
 
 - `TrdpPdSession` consolidates many publishers/subscribers onto a shared socket with 2 threads (vs ~2N+M threads and N+M sockets with individual instances)
+- Traffic shaping staggers cyclic sends to distribute network load evenly across each interval window
 - Single packet decode per receive with O(1) ComId dispatch via HashMap
 - Individual PD publishers and subscribers use separate threads for network I/O (simpler for single-ComId use)
 - MD requesters use asynchronous futures for non-blocking operations

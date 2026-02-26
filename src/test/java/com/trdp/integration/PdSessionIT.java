@@ -425,6 +425,92 @@ class PdSessionIT {
         }
     }
 
+    @Test
+    void testTrafficShapingStaggersPacketTiming() throws Exception {
+        int receiverPort = 19150;
+        UdpTransport receiver = new UdpTransport(receiverPort);
+        try {
+            int n = 4;
+            long intervalUs = 200_000; // 200ms → offset = 50ms
+
+            session = new TrdpPdSession(0);
+            for (int i = 0; i < n; i++) {
+                PdPublisherHandle pub = session.addPublisher(6000 + i, "127.0.0.1", receiverPort, intervalUs);
+                pub.putData(new byte[]{(byte) i});
+            }
+
+            long startNanos = System.nanoTime();
+            session.start();
+
+            // Receive n packets and record arrival times
+            long[] arrivalTimesMs = new long[n];
+            byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
+            for (int i = 0; i < n; i++) {
+                int len = receiver.receive(buffer, 2000);
+                assertThat(len).isGreaterThan(0);
+                arrivalTimesMs[i] = (System.nanoTime() - startNanos) / 1_000_000;
+            }
+
+            // With stagger: packets arrive at ~0ms, ~50ms, ~100ms, ~150ms
+            // Without stagger: all packets arrive at ~200ms
+            // First packet should arrive well before the interval (200ms)
+            assertThat(arrivalTimesMs[0])
+                    .as("First staggered packet should arrive before half the interval")
+                    .isLessThan(intervalUs / 2000); // < 100ms
+
+            // Spread between first and last should be significant (at least 75ms for 150ms theoretical)
+            long spreadMs = arrivalTimesMs[n - 1] - arrivalTimesMs[0];
+            assertThat(spreadMs)
+                    .as("Staggered packets should be spread across the interval")
+                    .isGreaterThan(50);
+        } finally {
+            receiver.close();
+        }
+    }
+
+    @Test
+    void testTrafficShapingDisabledAllFireTogether() throws Exception {
+        int receiverPort = 19151;
+        UdpTransport receiver = new UdpTransport(receiverPort);
+        try {
+            int n = 4;
+            long intervalUs = 200_000; // 200ms
+
+            session = new TrdpPdSession(0);
+            session.setTrafficShapingEnabled(false);
+            for (int i = 0; i < n; i++) {
+                PdPublisherHandle pub = session.addPublisher(6100 + i, "127.0.0.1", receiverPort, intervalUs);
+                pub.putData(new byte[]{(byte) i});
+            }
+
+            long startNanos = System.nanoTime();
+            session.start();
+
+            // Receive n packets and record arrival times
+            long[] arrivalTimesMs = new long[n];
+            byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
+            for (int i = 0; i < n; i++) {
+                int len = receiver.receive(buffer, 2000);
+                assertThat(len).isGreaterThan(0);
+                arrivalTimesMs[i] = (System.nanoTime() - startNanos) / 1_000_000;
+            }
+
+            // Without stagger: all packets arrive at ~200ms, spread should be minimal
+            // First packet should arrive near the interval (not before half the interval)
+            assertThat(arrivalTimesMs[0])
+                    .as("Without shaping, first packet should fire at the interval")
+                    .isGreaterThan(intervalUs / 2000 - 20); // > ~80ms
+
+            // All packets should arrive close together (within 50ms of each other)
+            long spreadMs = arrivalTimesMs[n - 1] - arrivalTimesMs[0];
+            assertThat(spreadMs)
+                    .as("Without shaping, all packets should fire together")
+                    .isLessThan(50);
+        } finally {
+            receiver.close();
+        }
+    }
+
     // --- Helpers ---
 
     private void sendPdPacket(UdpTransport transport, int comId, byte[] data,

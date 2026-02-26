@@ -14,8 +14,11 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
@@ -58,6 +61,7 @@ public class TrdpPdSession implements AutoCloseable {
     private final int port;
     private volatile boolean running;
     private volatile boolean started;
+    private boolean trafficShapingEnabled = true;
 
     // Publisher registry: ComId -> entry (one publisher per ComId)
     private final ConcurrentHashMap<Integer, PublisherEntry> publishers = new ConcurrentHashMap<>();
@@ -169,6 +173,29 @@ public class TrdpPdSession implements AutoCloseable {
     }
 
     /**
+     * Enables or disables traffic shaping for this session.
+     * When enabled, cyclic publishers sharing the same interval have their
+     * initial delays staggered evenly across the interval window, preventing
+     * network bursts. Must be called before {@link #start()}.
+     *
+     * @param enabled {@code true} to enable traffic shaping (default), {@code false} to disable.
+     * @throws IllegalStateException If the session has already been started.
+     */
+    public void setTrafficShapingEnabled(boolean enabled) {
+        if (started) {
+            throw new IllegalStateException("Cannot change traffic shaping after session has started");
+        }
+        this.trafficShapingEnabled = enabled;
+    }
+
+    /**
+     * Returns whether traffic shaping is enabled for this session.
+     */
+    public boolean isTrafficShapingEnabled() {
+        return trafficShapingEnabled;
+    }
+
+    /**
      * Starts the session: begins cyclic sends and the receive loop.
      * No more publishers or subscribers may be added after this call.
      *
@@ -189,11 +216,13 @@ public class TrdpPdSession implements AutoCloseable {
                 t.setDaemon(true);
                 return t;
             });
+            Map<Integer, Long> initialDelays = computeInitialDelays();
             for (PublisherEntry entry : publishers.values()) {
                 if (entry.intervalUs > 0) {
+                    long initialDelay = initialDelays.getOrDefault(entry.comId, entry.intervalUs);
                     entry.cyclicTask = sendScheduler.scheduleAtFixedRate(
                             () -> cyclicSend(entry),
-                            entry.intervalUs, entry.intervalUs, TimeUnit.MICROSECONDS);
+                            initialDelay, entry.intervalUs, TimeUnit.MICROSECONDS);
                 }
             }
         }
@@ -266,6 +295,33 @@ public class TrdpPdSession implements AutoCloseable {
         }
 
         logger.info("PD Session closed on port {}", transport.getLocalPort());
+    }
+
+    /**
+     * Computes staggered initial delays for cyclic publishers.
+     * Package-private for testing.
+     */
+    Map<Integer, Long> computeInitialDelays() {
+        Map<Integer, Long> delays = new HashMap<>();
+
+        Map<Long, List<PublisherEntry>> byInterval = publishers.values().stream()
+                .filter(e -> e.intervalUs > 0)
+                .collect(Collectors.groupingBy(e -> e.intervalUs));
+
+        for (var group : byInterval.values()) {
+            long interval = group.get(0).intervalUs;
+            int n = group.size();
+            long offset = interval / n;
+            boolean stagger = trafficShapingEnabled && (2 * offset <= interval);
+
+            int index = 0;
+            for (PublisherEntry entry : group) {
+                long initialDelay = stagger ? offset * index : interval;
+                delays.put(entry.comId, initialDelay);
+                index++;
+            }
+        }
+        return delays;
     }
 
     // --- Receive loop ---

@@ -329,6 +329,134 @@ class TrdpPdSessionTest {
         }
     }
 
+    // --- FCS error counter tests ---
+
+    @Test
+    void testFcsErrorCounterInitiallyZero() throws Exception {
+        session = new TrdpPdSession(19160);
+        assertThat(session.getFcsErrorCount()).isZero();
+    }
+
+    @Test
+    void testFcsErrorCounterIncrementsOnCorruptedPacket() throws Exception {
+        int port = 19161;
+        int comId = 4000;
+
+        session = new TrdpPdSession(port);
+        session.addSubscriber(comId, null, 0, new NoOpPdEventListener());
+        session.start();
+
+        Thread.sleep(200);
+
+        // Build a valid packet, then corrupt the header to cause FCS mismatch
+        UdpTransport sender = new UdpTransport(0);
+        try {
+            TrdpPdHeader header = new TrdpPdHeader();
+            header.setSequenceCounter(0);
+            header.setMessageType(TrdpMessageType.PD);
+            header.setComId(comId);
+            header.setDatasetLength(1);
+            TrdpPacket packet = new TrdpPacket(header, new byte[]{42});
+            byte[] encoded = packet.encode();
+
+            // Corrupt a byte in the header (not the FCS field) to trigger FCS mismatch
+            encoded[0] ^= 0xFF;
+
+            sender.send(encoded, InetAddress.getByName("127.0.0.1"), port);
+
+            Thread.sleep(500);
+            assertThat(session.getFcsErrorCount()).isEqualTo(1);
+        } finally {
+            sender.close();
+        }
+    }
+
+    @Test
+    void testFcsErrorCounterMultipleCorruptedPackets() throws Exception {
+        int port = 19162;
+        int comId = 4001;
+
+        session = new TrdpPdSession(port);
+        session.addSubscriber(comId, null, 0, new NoOpPdEventListener());
+        session.start();
+
+        Thread.sleep(200);
+
+        UdpTransport sender = new UdpTransport(0);
+        try {
+            for (int i = 0; i < 3; i++) {
+                TrdpPdHeader header = new TrdpPdHeader();
+                header.setSequenceCounter(i);
+                header.setMessageType(TrdpMessageType.PD);
+                header.setComId(comId);
+                header.setDatasetLength(1);
+                TrdpPacket packet = new TrdpPacket(header, new byte[]{(byte) i});
+                byte[] encoded = packet.encode();
+                encoded[0] ^= 0xFF;
+                sender.send(encoded, InetAddress.getByName("127.0.0.1"), port);
+            }
+
+            Thread.sleep(500);
+            assertThat(session.getFcsErrorCount()).isEqualTo(3);
+        } finally {
+            sender.close();
+        }
+    }
+
+    @Test
+    void testFcsErrorDoesNotIncrementSubscriberPacketsReceived() throws Exception {
+        int port = 19163;
+        int comId = 4002;
+
+        CountDownLatch validLatch = new CountDownLatch(1);
+        PdEventListener listener = new PdEventListener() {
+            @Override public void onData(PdEvent event) { validLatch.countDown(); }
+            @Override public void onTimeout(PdEvent event) {}
+            @Override public void onValidityRestored(PdEvent event) {}
+        };
+
+        session = new TrdpPdSession(port);
+        PdSubscriberHandle handle = session.addSubscriber(comId, null, 0, listener);
+        session.start();
+
+        Thread.sleep(200);
+
+        UdpTransport sender = new UdpTransport(0);
+        try {
+            // Send a corrupted packet
+            TrdpPdHeader header = new TrdpPdHeader();
+            header.setSequenceCounter(0);
+            header.setMessageType(TrdpMessageType.PD);
+            header.setComId(comId);
+            header.setDatasetLength(1);
+            TrdpPacket packet = new TrdpPacket(header, new byte[]{1});
+            byte[] encoded = packet.encode();
+            encoded[0] ^= 0xFF;
+            sender.send(encoded, InetAddress.getByName("127.0.0.1"), port);
+
+            Thread.sleep(300);
+
+            // FCS error should be counted, but subscriber should not see the packet
+            assertThat(session.getFcsErrorCount()).isEqualTo(1);
+            assertThat(handle.getPacketsReceived()).isZero();
+
+            // Now send a valid packet
+            header = new TrdpPdHeader();
+            header.setSequenceCounter(1);
+            header.setMessageType(TrdpMessageType.PD);
+            header.setComId(comId);
+            header.setDatasetLength(1);
+            packet = new TrdpPacket(header, new byte[]{2});
+            sender.send(packet.encode(), InetAddress.getByName("127.0.0.1"), port);
+
+            assertThat(validLatch.await(3, TimeUnit.SECONDS)).isTrue();
+            assertThat(handle.getPacketsReceived()).isEqualTo(1);
+            assertThat(session.getFcsErrorCount()).isEqualTo(1);
+        } finally {
+            sender.close();
+        }
+    }
+
     // --- Traffic shaping tests ---
 
     @Test

@@ -47,6 +47,7 @@ public class PdSubscriber implements AutoCloseable {
     private final AtomicLong topoErrorCount = new AtomicLong(0);
     private final AtomicLong packetsReceived = new AtomicLong(0);
     private final AtomicLong timeoutCount = new AtomicLong(0);
+    private final AtomicLong fcsErrorCount = new AtomicLong(0);
 
     public PdSubscriber(int comId, String address, int port) throws IOException {
         this(comId, address, port, TrdpConstants.DEFAULT_PD_TIMEOUT_US);
@@ -242,6 +243,13 @@ public class PdSubscriber implements AutoCloseable {
                         pdHeader.getReplyComId(), pdHeader.getReplyIpAddress(), 0);
                 notifyListeners(event);
             }
+        } catch (IllegalStateException e) {
+            if (e.getMessage() != null && e.getMessage().contains("FCS mismatch")) {
+                fcsErrorCount.incrementAndGet();
+                logger.debug("PD Subscriber: FCS error for ComID {}", comId);
+            } else {
+                logger.error("Error processing received PD packet", e);
+            }
         } catch (Exception e) {
             logger.error("Error processing received PD packet", e);
         }
@@ -312,12 +320,17 @@ public class PdSubscriber implements AutoCloseable {
         return timeoutCount.get();
     }
 
+    public long getFcsErrorCount() {
+        return fcsErrorCount.get();
+    }
+
     public void resetStatistics() {
         missedCount.set(0);
         duplicateCount.set(0);
         topoErrorCount.set(0);
         packetsReceived.set(0);
         timeoutCount.set(0);
+        fcsErrorCount.set(0);
     }
 
     public boolean isTimedOut() {

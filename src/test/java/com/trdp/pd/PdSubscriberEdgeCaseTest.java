@@ -638,6 +638,140 @@ class PdSubscriberEdgeCaseTest {
     }
 
     @Test
+    void testFcsErrorCounterInitiallyZero() throws Exception {
+        subscriber = new PdSubscriber(8020, "127.0.0.1", 19740);
+        assertThat(subscriber.getFcsErrorCount()).isZero();
+    }
+
+    @Test
+    void testFcsErrorCounterIncrementsOnCorruptedPacket() throws Exception {
+        int comId = 8021;
+        int port = 19741;
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port);
+        subscriber.addListener(dataOnly(event -> {}));
+        subscriber.start();
+
+        Thread.sleep(200);
+
+        sender = new UdpTransport(0);
+        TrdpPdHeader header = new TrdpPdHeader();
+        header.setSequenceCounter(0);
+        header.setMessageType(TrdpMessageType.PD);
+        header.setComId(comId);
+        header.setDatasetLength(1);
+        TrdpPacket packet = new TrdpPacket(header, new byte[]{42});
+        byte[] encoded = packet.encode();
+        // Corrupt header byte to trigger FCS mismatch
+        encoded[0] ^= 0xFF;
+
+        sender.send(encoded, InetAddress.getLoopbackAddress(), port);
+
+        Thread.sleep(500);
+        assertThat(subscriber.getFcsErrorCount()).isEqualTo(1);
+        assertThat(subscriber.getPacketsReceived()).isZero();
+    }
+
+    @Test
+    void testFcsErrorCounterMultipleCorruptedPackets() throws Exception {
+        int comId = 8022;
+        int port = 19742;
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port);
+        subscriber.addListener(dataOnly(event -> {}));
+        subscriber.start();
+
+        Thread.sleep(200);
+
+        sender = new UdpTransport(0);
+        for (int i = 0; i < 3; i++) {
+            TrdpPdHeader header = new TrdpPdHeader();
+            header.setSequenceCounter(i);
+            header.setMessageType(TrdpMessageType.PD);
+            header.setComId(comId);
+            header.setDatasetLength(1);
+            TrdpPacket packet = new TrdpPacket(header, new byte[]{(byte) i});
+            byte[] encoded = packet.encode();
+            encoded[0] ^= 0xFF;
+            sender.send(encoded, InetAddress.getLoopbackAddress(), port);
+        }
+
+        Thread.sleep(500);
+        assertThat(subscriber.getFcsErrorCount()).isEqualTo(3);
+    }
+
+    @Test
+    void testFcsErrorCounterResetStatistics() throws Exception {
+        int comId = 8023;
+        int port = 19743;
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port);
+        subscriber.addListener(dataOnly(event -> {}));
+        subscriber.start();
+
+        Thread.sleep(200);
+
+        sender = new UdpTransport(0);
+        TrdpPdHeader header = new TrdpPdHeader();
+        header.setSequenceCounter(0);
+        header.setMessageType(TrdpMessageType.PD);
+        header.setComId(comId);
+        header.setDatasetLength(1);
+        TrdpPacket packet = new TrdpPacket(header, new byte[]{1});
+        byte[] encoded = packet.encode();
+        encoded[0] ^= 0xFF;
+        sender.send(encoded, InetAddress.getLoopbackAddress(), port);
+
+        Thread.sleep(500);
+        assertThat(subscriber.getFcsErrorCount()).isEqualTo(1);
+
+        subscriber.resetStatistics();
+        assertThat(subscriber.getFcsErrorCount()).isZero();
+    }
+
+    @Test
+    void testFcsErrorDoesNotAffectValidPackets() throws Exception {
+        int comId = 8024;
+        int port = 19744;
+
+        CountDownLatch latch = new CountDownLatch(1);
+
+        subscriber = new PdSubscriber(comId, "127.0.0.1", port);
+        subscriber.addListener(dataOnly(event -> latch.countDown()));
+        subscriber.start();
+
+        Thread.sleep(200);
+
+        sender = new UdpTransport(0);
+
+        // Send a corrupted packet first
+        TrdpPdHeader header = new TrdpPdHeader();
+        header.setSequenceCounter(0);
+        header.setMessageType(TrdpMessageType.PD);
+        header.setComId(comId);
+        header.setDatasetLength(1);
+        TrdpPacket packet = new TrdpPacket(header, new byte[]{1});
+        byte[] encoded = packet.encode();
+        encoded[0] ^= 0xFF;
+        sender.send(encoded, InetAddress.getLoopbackAddress(), port);
+
+        Thread.sleep(300);
+
+        // Then send a valid packet
+        header = new TrdpPdHeader();
+        header.setSequenceCounter(1);
+        header.setMessageType(TrdpMessageType.PD);
+        header.setComId(comId);
+        header.setDatasetLength(1);
+        packet = new TrdpPacket(header, new byte[]{2});
+        sender.send(packet.encode(), InetAddress.getLoopbackAddress(), port);
+
+        assertThat(latch.await(3, TimeUnit.SECONDS)).isTrue();
+        assertThat(subscriber.getFcsErrorCount()).isEqualTo(1);
+        assertThat(subscriber.getPacketsReceived()).isEqualTo(1);
+    }
+
+    @Test
     void testEventSourceAddressPopulated() throws Exception {
         int comId = 8010;
         int port = 19712;

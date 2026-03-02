@@ -82,6 +82,9 @@ public class TrdpPdSession implements AutoCloseable {
     private volatile int etbTopoCnt;
     private volatile int opTrnTopoCnt;
 
+    // Session-level FCS error counter
+    private final AtomicLong fcsErrorCount = new AtomicLong();
+
     /**
      * Creates a PD session on the specified port.
      *
@@ -262,6 +265,13 @@ public class TrdpPdSession implements AutoCloseable {
         return transport.getLocalPort();
     }
 
+    /**
+     * Returns the number of packets rejected due to FCS (CRC) validation failure.
+     */
+    public long getFcsErrorCount() {
+        return fcsErrorCount.get();
+    }
+
     @Override
     public void close() {
         running = false;
@@ -380,6 +390,13 @@ public class TrdpPdSession implements AutoCloseable {
                         processForSubscriber(entry, packet, header, received);
                     }
                 }
+            }
+        } catch (IllegalStateException e) {
+            if (e.getMessage() != null && e.getMessage().contains("FCS mismatch")) {
+                fcsErrorCount.incrementAndGet();
+                logger.debug("PD Session: FCS error on port {}", transport.getLocalPort());
+            } else {
+                logger.error("PD Session: error processing packet on port {}", transport.getLocalPort(), e);
             }
         } catch (Exception e) {
             logger.error("PD Session: error processing packet on port {}", transport.getLocalPort(), e);

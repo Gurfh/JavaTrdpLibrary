@@ -596,6 +596,11 @@ public class TrdpPdSession implements AutoCloseable {
 
         @Override
         public void putDataImmediate(byte[] data) throws IOException {
+            if (intervalUs > 0) {
+                throw new IllegalStateException(
+                        "putDataImmediate() cannot be used on cyclic publishers (intervalUs=" + intervalUs
+                                + "). Use putData() to stage data for cyclic sending.");
+            }
             putData(data);
             sendPd(this, Arrays.copyOf(data, data.length), destinationAddress, destinationPort,
                     TrdpMessageType.PD, 0);

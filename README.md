@@ -26,7 +26,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - High-performance session manager (`TrdpPdSession`) with shared socket and thread pool
   - Traffic shaping: staggered initial delays prevent network bursts when many publishers share the same interval
   - Cyclic auto-retransmission with configurable interval
-  - Immediate out-of-cycle send
+  - Immediate send for non-cyclic publishers via `putDataImmediate()`
   - UDP multicast and unicast communication
   - Automatic per-ComID sequence numbering
   - Sequence counter validation per IEC 61375-2-3 (duplicate/old packet rejection, gap detection, sender restart handling)
@@ -139,9 +139,6 @@ try (TrdpPdSession session = new TrdpPdSession(17224)) {
 
     // Stage data for cyclic transmission
     pub.putData("Cyclic payload".getBytes());
-
-    // Or send immediately
-    pub.putDataImmediate("Urgent data".getBytes());
 
     // Query subscriber state
     if (sub.isTimedOut()) {

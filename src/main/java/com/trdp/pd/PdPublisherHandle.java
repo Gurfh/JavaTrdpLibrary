@@ -20,10 +20,12 @@ public interface PdPublisherHandle {
 
     /**
      * Updates the data and immediately sends it to the configured destination.
-     * Does not reset the cyclic timer.
+     * Only allowed on non-cyclic publishers (intervalUs == 0). For cyclic publishers,
+     * use {@link #putData(byte[])} to stage data for the next cyclic send.
      *
      * @param data The process data to send.
      * @throws IOException If sending fails.
+     * @throws IllegalStateException if called on a cyclic publisher (intervalUs &gt; 0).
      * @throws IllegalArgumentException if data exceeds maximum PD data size.
      */
     void putDataImmediate(byte[] data) throws IOException;

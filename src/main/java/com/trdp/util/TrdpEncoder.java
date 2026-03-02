@@ -125,11 +125,6 @@ public class TrdpEncoder {
         return this;
     }
     
-    public TrdpEncoder putBytes(byte[] value) {
-        buffer.put(value);
-        return this;
-    }
-    
     public TrdpEncoder align(int alignment) {
         int position = buffer.position();
         int padding = (alignment - (position % alignment)) % alignment;

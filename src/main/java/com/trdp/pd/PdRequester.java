@@ -2,7 +2,6 @@ package com.trdp.pd;
 
 import com.trdp.network.UdpTransport;
 import com.trdp.protocol.TrdpConstants;
-import com.trdp.protocol.TrdpHeader;
 import com.trdp.protocol.TrdpMessageType;
 import com.trdp.protocol.TrdpPacket;
 import com.trdp.protocol.TrdpPdHeader;

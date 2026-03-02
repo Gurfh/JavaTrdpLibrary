@@ -83,178 +83,9 @@ For a stable release (e.g., based on a Git tag like `v1.0.0`):
 
 ## Usage
 
-### Process Data (PD) - Publisher/Subscriber (Push)
+### Process Data (PD) - Publisher/Subscriber
 
-#### Creating a Publisher
-
-```java
-import com.trdp.pd.PdPublisher;
-
-// Create a publisher for ComID 1000 (immediate send, no cyclic)
-try (PdPublisher publisher = new PdPublisher(1000, "239.255.0.1", 17224)) {
-    // Update data and send immediately
-    byte[] data = "Hello TRDP".getBytes();
-    publisher.putDataImmediate(data);
-}
-
-// Create a cyclic publisher (auto-retransmit every 100ms)
-try (PdPublisher publisher = new PdPublisher(1000, "239.255.0.1", 17224, 0, 100_000)) {
-    publisher.putData("Cyclic data".getBytes());
-    publisher.start(); // begins cyclic transmission
-
-    // Data can be updated at any time; the next cycle picks it up
-    Thread.sleep(500);
-    publisher.putData("Updated data".getBytes());
-
-    // Or send immediately without waiting for the next cycle
-    publisher.putDataImmediate("Urgent data".getBytes());
-
-    Thread.sleep(60000);
-}
-```
-
-#### Creating a Subscriber
-
-```java
-import com.trdp.pd.PdSubscriber;
-import com.trdp.pd.PdEvent;
-import com.trdp.pd.PdEventListener;
-
-// Create a subscriber for ComID 1000 (default timeout: 100ms)
-try (PdSubscriber subscriber = new PdSubscriber(1000, "239.255.0.1", 17224)) {
-    // Or with a custom timeout: new PdSubscriber(1000, "239.255.0.1", 17224, 500_000) // 500ms
-
-    // Add an event listener
-    subscriber.addListener(new PdEventListener() {
-        @Override
-        public void onData(PdEvent event) {
-            System.out.println("Received data from ComID " + event.getComId());
-            System.out.println("Sequence: " + event.getSequenceCounter());
-            System.out.println("Source: " + event.getSourceAddress());
-        }
-
-        @Override
-        public void onTimeout(PdEvent event) {
-            System.out.println("Timeout for ComID " + event.getComId());
-        }
-
-        @Override
-        public void onValidityRestored(PdEvent event) {
-            System.out.println("Validity restored for ComID " + event.getComId());
-        }
-    });
-
-    // Start receiving data
-    subscriber.start();
-
-    // Poll timeout state (alternative to onTimeout callback)
-    if (subscriber.isTimedOut()) {
-        System.out.println("No data received within timeout period");
-    }
-
-    // Keep running to receive data
-    Thread.sleep(60000);
-}
-
-```
-
-### Process Data (PD) - Pull Pattern
-
-The library supports the PD Pull pattern where a `Requester` solicits data from a `Publisher` (acting as a Replier), which then sends a `PD_REPLY` to a `Subscriber`.
-
-#### Configuring a Publisher for Pull
-
-To support Pull requests, the Publisher must be initialized with a listening port.
-
-```java
-import com.trdp.pd.PdPublisher;
-
-// Create a publisher that listens for requests on port 17224
-// It can serve both Push (to multicast) and Pull (request/reply) simultaneously
-try (PdPublisher publisher = new PdPublisher(1000, "239.255.0.1", 17224, 17224)) {
-    // Update the internal data buffer without sending a Push message
-    // This data will be sent in the Reply when a Request is received
-    publisher.putData("Pull me!".getBytes());
-    
-    // Start the request listener
-    publisher.start();
-    
-    // Keep alive
-    Thread.sleep(60000);
-}
-
-```
-
-#### Requesting Data (Unicast)
-
-The simplest way to pull data is using the `PdSubscriber` to send the request. This ensures the unicast reply is routed back to the subscriber's socket.
-
-```java
-import com.trdp.pd.PdSubscriber;
-import com.trdp.pd.PdEvent;
-import com.trdp.pd.PdEventListener;
-
-try (PdSubscriber subscriber = new PdSubscriber(1000, "0.0.0.0", 17224)) {
-    subscriber.addListener(new PdEventListener() {
-        @Override
-        public void onData(PdEvent event) {
-            System.out.println("Received Pull Reply: " + new String(event.getData()));
-        }
-
-        @Override
-        public void onTimeout(PdEvent event) { }
-
-        @Override
-        public void onValidityRestored(PdEvent event) { }
-    });
-    subscriber.start();
-
-    // Send a Pull Request to the Publisher at 192.168.1.50
-    subscriber.request(
-        1000,              // ComID to request
-        "192.168.1.50",    // Publisher IP
-        17224,             // Publisher Port
-        0,                 // Reply ComID (0 = use requested ComID)
-        null               // Reply IP (null = unicast back to source)
-    );
-}
-
-```
-
-#### Requesting Data (Multicast / Separate Requester)
-
-You can also use a standalone `PdRequester` to solicit data, for example, asking a Publisher to send the reply to a Multicast group.
-
-```java
-import com.trdp.pd.PdRequester;
-
-try (PdRequester requester = new PdRequester(0)) { // 0 = ephemeral port
-    // Request ComID 1000 from Publisher at 192.168.1.50
-    // Ask Publisher to send reply to Multicast Group 239.255.0.1
-    requester.request(
-        1000,               // ComID
-        "192.168.1.50",     // Publisher IP
-        17224,              // Publisher Port
-        0,                  // Reply ComID
-        "239.255.0.1"       // Reply to this Multicast Group
-    );
-
-    // Optionally include a payload in the request
-    requester.request(
-        1000,               // ComID
-        "192.168.1.50",     // Publisher IP
-        17224,              // Publisher Port
-        0,                  // Reply ComID
-        "239.255.0.1",      // Reply to this Multicast Group
-        new byte[]{1, 2, 3} // Optional payload
-    );
-}
-
-```
-
-### Process Data (PD) - High-Performance Session
-
-For applications managing many concurrent ComIds, `TrdpPdSession` consolidates all publishers and subscribers onto a single shared UDP socket with minimal threads. This reduces resource usage from ~2N+M threads and N+M sockets to just 2 threads and 1 socket.
+All PD communication is managed through `TrdpPdSession`, which consolidates publishers and subscribers onto a single shared UDP socket with just 2 threads.
 
 ```java
 import com.trdp.pd.TrdpPdSession;
@@ -322,7 +153,35 @@ try (TrdpPdSession session = new TrdpPdSession(17224)) {
 }
 ```
 
-The individual `PdPublisher` and `PdSubscriber` classes remain available for simple single-ComId use cases.
+### Process Data (PD) - Pull Pattern
+
+The library supports the PD Pull pattern where a `PdRequester` solicits data from a `TrdpPdSession` publisher (acting as a Replier), which then sends a `PD_REPLY` to subscribers.
+
+```java
+import com.trdp.pd.TrdpPdSession;
+import com.trdp.pd.PdPublisherHandle;
+import com.trdp.pd.PdRequester;
+
+// Publisher session: listens for pull requests and replies
+try (TrdpPdSession pubSession = new TrdpPdSession(17224)) {
+    PdPublisherHandle pub = pubSession.addPublisher(1000, "239.255.0.1", 17224, 0);
+    pub.putData("Pull me!".getBytes());
+    pubSession.start();
+
+    // Requester: sends a pull request, asking for reply to a multicast group
+    try (PdRequester requester = new PdRequester(0)) {
+        requester.request(
+            1000,               // ComID
+            "192.168.1.50",     // Publisher IP
+            17224,              // Publisher Port
+            0,                  // Reply ComID (0 = use requested ComID)
+            "239.255.0.1"       // Reply to this Multicast Group
+        );
+    }
+
+    Thread.sleep(60000);
+}
+```
 
 ### Message Data (MD) - Request/Reply
 
@@ -424,8 +283,8 @@ try (MdReplier replier = new MdReplier(17226, handler, 3_000_000)) {
 ```java
 import com.trdp.util.TrdpDataset;
 import com.trdp.util.TrdpDataType;
-import com.trdp.pd.PdPublisher;
-import com.trdp.pd.PdSubscriber;
+import com.trdp.pd.TrdpPdSession;
+import com.trdp.pd.PdPublisherHandle;
 import com.trdp.pd.PdEvent;
 import com.trdp.pd.PdEventListener;
 import java.time.Instant;
@@ -446,12 +305,7 @@ TrdpDataset trainData = new TrdpDataset()
 // Encode the dataset to bytes
 byte[] encodedData = trainData.encode();
 
-// Publish the structured data
-try (PdPublisher publisher = new PdPublisher(3000, "239.255.0.1", 19200)) {
-    publisher.putDataImmediate(encodedData);
-}
-
-// Subscribe and decode the data
+// Define the schema for decoding
 List<TrdpDataset.FieldDefinition> schema = Arrays.asList(
     new TrdpDataset.FieldDefinition("trainId", TrdpDataType.UINT16),
     new TrdpDataset.FieldDefinition("carNumber", TrdpDataType.UINT8),
@@ -463,8 +317,11 @@ List<TrdpDataset.FieldDefinition> schema = Arrays.asList(
     new TrdpDataset.FieldDefinition("timestamp", TrdpDataType.TIMEDATE64)
 );
 
-try (PdSubscriber subscriber = new PdSubscriber(3000, "239.255.0.1", 19200)) {
-    subscriber.addListener(new PdEventListener() {
+// Publish and subscribe using TrdpPdSession
+try (TrdpPdSession session = new TrdpPdSession(19200)) {
+    PdPublisherHandle pub = session.addPublisher(3000, "239.255.0.1", 19200, 0);
+
+    session.addSubscriber(3000, "239.255.0.1", 0, new PdEventListener() {
         @Override
         public void onData(PdEvent event) {
             TrdpDataset decoded = TrdpDataset.decode(event.getData(), schema);
@@ -483,8 +340,9 @@ try (PdSubscriber subscriber = new PdSubscriber(3000, "239.255.0.1", 19200)) {
         @Override
         public void onValidityRestored(PdEvent event) { }
     });
-    
-    subscriber.start();
+
+    session.start();
+    pub.putDataImmediate(encodedData);
     Thread.sleep(60000);
 }
 ```
@@ -611,14 +469,12 @@ com.trdp
 │   ├── TrdpMessageType # Message type enumeration
 │   └── TrdpConstants   # Protocol constants
 ├── pd               # Process Data components
-│   ├── TrdpPdSession    # High-performance shared-socket session manager
-│   ├── PdPublisher      # PD publisher (single ComId)
-│   ├── PdSubscriber     # PD subscriber (single ComId)
-│   ├── PdRequester      # PD requester implementation
-│   ├── PdPublisherHandle  # Publisher handle interface (session)
-│   ├── PdSubscriberHandle # Subscriber handle interface (session)
-│   ├── PdEvent          # Immutable PD event object
-│   └── PdEventListener  # PD event listener interface
+│   ├── TrdpPdSession      # Shared-socket PD session manager
+│   ├── PdRequester        # PD pull pattern requester
+│   ├── PdPublisherHandle  # Publisher handle interface
+│   ├── PdSubscriberHandle # Subscriber handle interface
+│   ├── PdEvent            # Immutable PD event object
+│   └── PdEventListener    # PD event listener interface
 ├── md               # Message Data components
 │   ├── MdRequester     # MD requester implementation
 │   ├── MdReplier       # MD replier implementation
@@ -705,17 +561,15 @@ All public APIs are thread-safe. The library uses:
 All main components implement `AutoCloseable` for proper resource cleanup:
 
 ```java
-try (PdPublisher publisher = new PdPublisher(1000, "239.255.0.1", 17224)) {
-    // Use publisher
+try (TrdpPdSession session = new TrdpPdSession(17224)) {
+    // Use session
 } // Automatically closed
 ```
 
 ## Performance Considerations
 
-- `TrdpPdSession` consolidates many publishers/subscribers onto a shared socket with 2 threads (vs ~2N+M threads and N+M sockets with individual instances)
+- `TrdpPdSession` consolidates all publishers/subscribers onto a shared socket with 2 threads and O(1) ComId dispatch via HashMap
 - Traffic shaping staggers cyclic sends to distribute network load evenly across each interval window
-- Single packet decode per receive with O(1) ComId dispatch via HashMap
-- Individual PD publishers and subscribers use separate threads for network I/O (simpler for single-ComId use)
 - MD requesters use asynchronous futures for non-blocking operations
 - Multicast is used for efficient PD distribution
 - Configurable timeouts for all communication patterns

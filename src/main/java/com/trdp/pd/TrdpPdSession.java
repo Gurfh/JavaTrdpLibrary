@@ -35,9 +35,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * High-performance PD session manager that shares a single UDP socket and
  * a minimal number of threads across multiple publishers and subscribers.
  * <p>
- * Use this instead of individual {@link PdPublisher}/{@link PdSubscriber} instances
- * when managing many concurrent ComIds. Reduces ~2N+M threads and N+M sockets
- * to 2 threads and 1 socket.
+ * Manages multiple PD publishers and subscribers on a single UDP socket
+ * with a single receive thread and shared cyclic send scheduler (2 threads
+ * and 1 socket total).
  * <p>
  * Usage:
  * <pre>{@code
@@ -403,7 +403,7 @@ public class TrdpPdSession implements AutoCloseable {
         }
     }
 
-    // --- Subscriber processing (mirrors PdSubscriber.processReceivedData) ---
+    // --- Subscriber processing ---
 
     private void processForSubscriber(SubscriberEntry entry, TrdpPacket packet,
                                       TrdpPdHeader header, ReceivedPacket received) {

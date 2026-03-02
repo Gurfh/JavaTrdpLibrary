@@ -2,8 +2,8 @@ package com.trdp.integration;
 
 import com.trdp.pd.PdEvent;
 import com.trdp.pd.PdEventListener;
-import com.trdp.pd.PdPublisher;
-import com.trdp.pd.PdSubscriber;
+import com.trdp.pd.PdPublisherHandle;
+import com.trdp.pd.TrdpPdSession;
 import com.trdp.util.TrdpDataset;
 import com.trdp.util.TrdpDataType;
 import org.junit.jupiter.api.Test;
@@ -20,17 +20,13 @@ import java.util.function.Consumer;
 
 class DataTypeIntegrationIT {
 
-    private PdPublisher publisher;
-    private PdSubscriber subscriber;
+    private TrdpPdSession pubSession;
+    private TrdpPdSession subSession;
 
     @AfterEach
     void tearDown() {
-        if (publisher != null) {
-            publisher.close();
-        }
-        if (subscriber != null) {
-            subscriber.close();
-        }
+        if (pubSession != null) pubSession.close();
+        if (subSession != null) subSession.close();
     }
 
     private static PdEventListener dataOnly(Consumer<PdEvent> callback) {
@@ -73,17 +69,18 @@ class DataTypeIntegrationIT {
             new TrdpDataset.FieldDefinition("timestamp", TrdpDataType.TIMEDATE64)
         );
 
-        subscriber = new PdSubscriber(comId, multicastGroup, port);
-        subscriber.addListener(dataOnly(event -> {
+        subSession = new TrdpPdSession(port);
+        subSession.addSubscriber(comId, multicastGroup, 0, dataOnly(event -> {
             receivedData.set(event.getData());
             latch.countDown();
         }));
-        subscriber.start();
+        subSession.start();
 
         Thread.sleep(500);
 
-        publisher = new PdPublisher(comId, multicastGroup, port);
-        publisher.putDataImmediate(encodedData);
+        pubSession = new TrdpPdSession(0);
+        PdPublisherHandle pub = pubSession.addPublisher(comId, multicastGroup, port, 0);
+        pub.putDataImmediate(encodedData);
 
         boolean received = latch.await(3, TimeUnit.SECONDS);
 

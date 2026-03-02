@@ -12,8 +12,8 @@ Java implementation of TRDP (Train Real-Time Data Protocol, IEC 61375-2-3) for r
 mvn clean compile                                    # Build
 mvn test                                             # Unit tests (*Test.java)
 mvn verify                                           # Unit + integration tests (*IT.java)
-mvn test -Dtest=PdPublisherTest                      # Single test class
-mvn test -Dtest=PdPublisherTest#testPublishData      # Single test method
+mvn test -Dtest=TrdpPdSessionTest                    # Single test class
+mvn test -Dtest=TrdpPdSessionTest#testAddPublisher   # Single test method
 mvn package                                          # Package JAR
 ```
 
@@ -26,14 +26,14 @@ All source lives under `src/main/java/com/trdp/`, tests under `src/test/java/com
 ### Package Structure
 
 - **`protocol`** — Core TRDP wire format: `TrdpPdHeader` (40 bytes), `TrdpMdHeader` (116 bytes), `TrdpPacket` encode/decode, `TrdpMessageType` enum, `TrdpConstants`. All fields Big Endian except HeaderFCS (Little Endian CRC32 per IEEE 802.3).
-- **`pd`** — Process Data layer: `PdPublisher` (push/pull/cyclic), `PdSubscriber` (multicast/unicast receive with sequence counter validation), `PdRequester` (pull pattern initiator, per-ComID sequence counters), `PdEvent` immutable event object, `PdEventListener` callback interface (onData/onTimeout/onValidityRestored).
+- **`pd`** — Process Data layer: `TrdpPdSession` (shared-socket session manager for publishers and subscribers), `PdRequester` (pull pattern initiator, per-ComID sequence counters), `PdPublisherHandle`/`PdSubscriberHandle` (handle interfaces), `PdEvent` immutable event object, `PdEventListener` callback interface (onData/onTimeout/onValidityRestored).
 - **`md`** — Message Data layer: `MdRequester`/`MdReplier` for async request/reply via `CompletableFuture`, `MdRequestHandler` callback interface. Supports UDP and TCP (`TransportProtocol` enum).
 - **`util`** — `TrdpEncoder`/`TrdpDecoder` for type-safe Big Endian serialization of all IEC 61375-2-3 data types, `TrdpDataset` builder for structured payloads, `FcsUtils` for CRC32, `TrdpTopologyUtils` for shared topology validation.
 - **`network`** — `UdpTransport` (with multicast group management), `TcpTransport` (client/server with connection pooling).
 
 ### Key Design Patterns
 
-- All main components (`PdPublisher`, `PdSubscriber`, `MdRequester`, `MdReplier`) implement `AutoCloseable` and use separate I/O threads
+- All main components (`TrdpPdSession`, `PdRequester`, `MdRequester`, `MdReplier`) implement `AutoCloseable` and use separate I/O threads
 - `TrdpEncoder` and `TrdpDataset` use fluent/builder interfaces for chaining
 - Static `decode()` factory methods on headers and packets
 - Payloads are 4-byte aligned with automatic padding
@@ -56,7 +56,7 @@ All source lives under `src/main/java/com/trdp/`, tests under `src/test/java/com
 ## Known Pitfalls
 
 ### Byte array ownership
-All public `byte[]` boundaries make defensive copies: `TrdpPacket` (constructor and `getPayload()`), `ReceivedPacket` (constructor and `getData()`), `PdPublisher.putData()`, and `PdSubscriber.notifyListeners()` (per-listener copy). Follow this pattern when adding new code that stores or exposes byte arrays.
+All public `byte[]` boundaries make defensive copies: `TrdpPacket` (constructor and `getPayload()`), `ReceivedPacket` (constructor and `getData()`), `TrdpPdSession.PublisherEntry.putData()`, and `TrdpPdSession` subscriber dispatch (per-listener copy). Follow this pattern when adding new code that stores or exposes byte arrays.
 
 ### TCP message framing
 TCP does not preserve message boundaries. Any TCP receiver must read the fixed-size header first (MD: 116 bytes), decode `datasetLength`, then read the exact payload — never assume a single `InputStream.read()` returns a complete TRDP packet. `MdReplier.handleTcpConnection()` and `MdRequester.startTcpReplyListener()` both use `DataInputStream.readFully()` for this. `TcpTransport.receive()` does a single read and should not be used for framed message protocols.
@@ -70,23 +70,11 @@ The 16-bit fractional part of TIMEDATE48 uses binary fractions (ticks of 1/65536
 ### UINT64 range
 `TrdpDecoder.getUInt64()` returns Java `long`. Values above `Long.MAX_VALUE` appear negative. Use `Long.toUnsignedString()` and `Long.compareUnsigned()` for the full unsigned range.
 
-### PdPublisher cyclic engine
-`PdPublisher` supports three send modes: (1) cyclic auto-retransmission via `start()` when constructed with `intervalUs > 0`, (2) immediate out-of-cycle send via `putDataImmediate(byte[])`, and (3) data-only update via `putData(byte[])` for pull replies or deferred cyclic pickup. The former `publish()` method was removed — use `putDataImmediate()` instead. The cyclic scheduler is a `ScheduledExecutorService` that skips sending when the data buffer is empty (no `putData()` called yet).
-
 ### PdRequester per-ComID sequence counters
 `PdRequester` maintains independent sequence counters per ComID via `ConcurrentHashMap<Integer, AtomicInteger>`. The `request()` method also has a 6-parameter overload accepting an optional `byte[] payload`.
 
 ### Multicast interface selection
 `UdpTransport.joinMulticastGroup(InetAddress)` auto-selects a network interface. On multi-homed systems, use the overload `joinMulticastGroup(InetAddress, NetworkInterface)` to specify the interface explicitly.
-
-### PdSubscriber timeout / staleness detection
-`PdSubscriber` detects when data stops arriving within a configurable timeout interval. Constructor accepts `timeoutUs` (microseconds, default `DEFAULT_PD_TIMEOUT_US = 100_000` = 100ms, 0 to disable). Internally tracks `lastReceivedTimeNanos` (updated only on valid matching-comId packets — non-matching packets do not reset the timer). The receive loop uses elapsed-time comparison (`System.nanoTime()` delta) rather than relying solely on socket timeout. On first timeout: fires `onTimeout(PdEvent)` once and sets a `timedOut` flag to suppress repeats. On next valid packet: clears `timedOut`, fires `onValidityRestored(PdEvent)` before sequence validation. Public `isTimedOut()` accessor supports polling-style usage (IEC 61375-2-3 `PD.poll`).
-
-### PdSubscriber sequence counter validation
-`PdSubscriber` validates incoming sequence counters per IEC 61375-2-3 Table A.3. It tracks the last sequence counter per source via a `ConcurrentHashMap` keyed by `(sourceAddress, comId, messageType)`. Rules: (1) first packet from unknown source or `seqCnt == 0` (sender restart) or subscriber was timed out → accept and reset, (2) `seqCnt > lastSeqCnt` (unsigned compare via `Integer.compareUnsigned()`) → accept and count gap as missed, (3) `seqCnt <= lastSeqCnt` → discard as duplicate/old. Timeout clears all per-source tracking. Statistics are available via `getMissedCount()`, `getDuplicateCount()`, `getTopoErrorCount()`, and `resetStatistics()`. The validity-restored event always fires before sequence validation so it is never suppressed.
-
-### PdSubscriber topology counter validation
-`PdSubscriber` validates incoming PD packets against local topology counters per IEC 61375-2-3 Table A.5. Both PD and MD layers use the shared `TrdpTopologyUtils.isValidTopology(localEtb, localOpTrn, remoteEtb, remoteOpTrn)` method. A zero value in either local or remote counter acts as a wildcard (always matches). Mismatched packets are silently discarded, incrementing `topoErrorCount`. Set local counters via `setTopologyCounters(etb, opTrn)`.
 
 ### URI field limits
 `TrdpMdHeader` source/destination URI fields are 32 bytes. Strings exceeding this are truncated at valid UTF-8 character boundaries (never splits multi-byte sequences). Keep URIs short.
@@ -104,7 +92,7 @@ The 16-bit fractional part of TIMEDATE48 uses binary fractions (ticks of 1/65536
 `MdRequester` TCP idle eviction and `MdReplier` confirmation timeout checking use demand-driven single-shot scheduling (not fixed-rate polling). Tasks are scheduled only when entries are added and self-reschedule if entries remain after expiry. This means zero CPU overhead when no TCP connections or pending confirmations exist. The `ScheduledExecutorService` is created eagerly (with `prestartCoreThread()` for thread visibility in tests) but no task runs until needed.
 
 ### TrdpPdSession shared-socket session manager
-`TrdpPdSession` manages multiple PD publishers and subscribers on a single UDP socket with a single receive thread and shared cyclic send scheduler. Use it instead of individual `PdPublisher`/`PdSubscriber` instances when managing many concurrent ComIds (reduces ~2N+M threads and N+M sockets to 2 threads and 1 socket). Registration methods (`addPublisher`/`addSubscriber`) must be called before `start()`; calling them after throws `IllegalStateException`. Each subscriber registration gets independent sequence counter tracking, timeout state, and statistics (like separate `PdSubscriber` instances). Callbacks run on the receive thread — avoid blocking in listeners. Sends are synchronized on the shared transport. One publisher per ComId; multiple subscribers per ComId are allowed. Handles returned by registration implement `PdPublisherHandle` and `PdSubscriberHandle` interfaces.
+`TrdpPdSession` manages multiple PD publishers and subscribers on a single UDP socket with a single receive thread and shared cyclic send scheduler (2 threads and 1 socket total). Registration methods (`addPublisher`/`addSubscriber`) must be called before `start()`; calling them after throws `IllegalStateException`. Each subscriber registration gets independent sequence counter tracking, timeout state, and statistics (like separate `PdSubscriber` instances). Callbacks run on the receive thread — avoid blocking in listeners. Sends are synchronized on the shared transport. One publisher per ComId; multiple subscribers per ComId are allowed. Handles returned by registration implement `PdPublisherHandle` and `PdSubscriberHandle` interfaces.
 
 ### TrdpPdSession traffic shaping
 `TrdpPdSession` supports traffic shaping to prevent network bursts when many cyclic publishers share the same interval. Enabled by default (`isTrafficShapingEnabled()` returns `true`). Toggle via `setTrafficShapingEnabled(boolean)` before `start()`. When enabled, `computeInitialDelays()` groups cyclic publishers by interval, computes `offset = interval / N` for each group of size N, and assigns staggered initial delays `offset * index` (index 0..N-1). Safety check: if `2 * offset > interval` (i.e., group of size 1), falls back to `initialDelay = interval` — single publishers behave unchanged. Publishers with different intervals are staggered independently per group. Example: 10 publishers at 10ms interval → first sends at 0ms, 1ms, 2ms, ..., 9ms instead of all at 10ms.

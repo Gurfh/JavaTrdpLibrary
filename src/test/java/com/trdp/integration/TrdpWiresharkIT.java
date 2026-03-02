@@ -4,8 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trdp.md.MdRequester;
 import com.trdp.md.TransportProtocol;
-import com.trdp.pd.PdPublisher;
+import com.trdp.pd.PdPublisherHandle;
 import com.trdp.pd.PdRequester;
+import com.trdp.pd.TrdpPdSession;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -34,7 +35,7 @@ class TrdpWiresharkIT {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    private PdPublisher pdPublisher;
+    private TrdpPdSession pdSession;
     private PdRequester pdRequester;
     private MdRequester mdRequester;
 
@@ -60,7 +61,7 @@ class TrdpWiresharkIT {
 
     @AfterEach
     void tearDown() {
-        if (pdPublisher != null) pdPublisher.close();
+        if (pdSession != null) pdSession.close();
         if (pdRequester != null) pdRequester.close();
         if (mdRequester != null) mdRequester.close();
     }
@@ -77,9 +78,10 @@ class TrdpWiresharkIT {
         Process tshark = startTshark(PD_PORT, 1);
         Thread.sleep(1000); // let tshark settle on the interface
 
-        pdPublisher = new PdPublisher(comId, "127.0.0.1", PD_PORT);
-        pdPublisher.setTopologyCounters(etbTopo, opTrnTopo);
-        pdPublisher.putDataImmediate(payload);
+        pdSession = new TrdpPdSession(0);
+        pdSession.setTopologyCounters(etbTopo, opTrnTopo);
+        PdPublisherHandle pub = pdSession.addPublisher(comId, "127.0.0.1", PD_PORT, 0);
+        pub.putDataImmediate(payload);
 
         List<JsonNode> packets = stopAndParse(tshark);
 
@@ -194,8 +196,9 @@ class TrdpWiresharkIT {
         Thread.sleep(1000);
 
         // 1. PD Push
-        pdPublisher = new PdPublisher(1000, "127.0.0.1", PD_PORT);
-        pdPublisher.putDataImmediate("multi-pd".getBytes(StandardCharsets.UTF_8));
+        pdSession = new TrdpPdSession(0);
+        PdPublisherHandle pub = pdSession.addPublisher(1000, "127.0.0.1", PD_PORT, 0);
+        pub.putDataImmediate("multi-pd".getBytes(StandardCharsets.UTF_8));
 
         // 2. PD Request
         pdRequester = new PdRequester(0);
@@ -239,8 +242,9 @@ class TrdpWiresharkIT {
         Process tshark = startTshark(PD_PORT, 1);
         Thread.sleep(1000);
 
-        pdPublisher = new PdPublisher(8000, "127.0.0.1", PD_PORT);
-        pdPublisher.putDataImmediate("fcs-check".getBytes(StandardCharsets.UTF_8));
+        pdSession = new TrdpPdSession(0);
+        PdPublisherHandle pub = pdSession.addPublisher(8000, "127.0.0.1", PD_PORT, 0);
+        pub.putDataImmediate("fcs-check".getBytes(StandardCharsets.UTF_8));
 
         List<JsonNode> packets = stopAndParse(tshark);
 

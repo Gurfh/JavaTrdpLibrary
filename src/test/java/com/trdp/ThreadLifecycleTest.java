@@ -3,8 +3,7 @@ package com.trdp;
 import com.trdp.md.MdReplier;
 import com.trdp.md.MdRequester;
 import com.trdp.md.MdResponse;
-import com.trdp.pd.PdPublisher;
-import com.trdp.pd.PdSubscriber;
+import com.trdp.pd.TrdpPdSession;
 import org.junit.jupiter.api.Test;
 
 import java.util.Set;
@@ -25,71 +24,50 @@ class ThreadLifecycleTest {
     /** close() must finish well under the 2s awaitTermination timeout */
     private static final long MAX_CLOSE_MS = 1000;
 
-    // --- PdPublisher ---
+    // --- TrdpPdSession ---
 
     @Test
-    void testPdPublisherClosesPromptly() throws Exception {
-        PdPublisher publisher = new PdPublisher(9900, "127.0.0.1", 17224, 0);
-        publisher.start();
+    void testTrdpPdSessionClosesPromptly() throws Exception {
+        TrdpPdSession session = new TrdpPdSession(0);
+        session.addPublisher(9900, "127.0.0.1", 17224, 100_000);
+        session.addSubscriber(9901, null, 0, new com.trdp.pd.PdEventListener() {
+            @Override public void onData(com.trdp.pd.PdEvent event) {}
+            @Override public void onTimeout(com.trdp.pd.PdEvent event) {}
+            @Override public void onValidityRestored(com.trdp.pd.PdEvent event) {}
+        });
+        session.start();
         Thread.sleep(100);
 
-        long elapsed = timedClose(publisher::close);
+        long elapsed = timedClose(session::close);
 
         assertThat(elapsed)
-            .as("PdPublisher.close() should not block on socket timeout")
+            .as("TrdpPdSession.close() should not block on socket timeout")
             .isLessThan(MAX_CLOSE_MS);
     }
 
     @Test
-    void testPdPublisherListenerThreadDiesAfterClose() throws Exception {
-        int comId = 9901;
-        PdPublisher publisher = new PdPublisher(comId, "127.0.0.1", 17224, 0);
-        publisher.start();
+    void testTrdpPdSessionThreadsDieAfterClose() throws Exception {
+        TrdpPdSession session = new TrdpPdSession(0);
+        int port = session.getPort();
+        session.addPublisher(9902, "127.0.0.1", 17224, 100_000);
+        session.start();
         Thread.sleep(100);
 
-        assertThat(findThreadsByPrefix("PD-Publisher-Listener-" + comId))
-            .as("Listener thread should be running before close")
+        assertThat(findThreadsByPrefix("PD-Session-Recv-" + port))
+            .as("Receive thread should be running before close")
+            .isNotEmpty();
+        assertThat(findThreadsByPrefix("PD-Session-Send-" + port))
+            .as("Send thread should be running before close")
             .isNotEmpty();
 
-        publisher.close();
+        session.close();
         Thread.sleep(200);
 
-        assertThat(findThreadsByPrefix("PD-Publisher-Listener-" + comId))
-            .as("Listener thread should be dead after close")
+        assertThat(findThreadsByPrefix("PD-Session-Recv-" + port))
+            .as("Receive thread should be dead after close")
             .isEmpty();
-    }
-
-    // --- PdSubscriber ---
-
-    @Test
-    void testPdSubscriberClosesPromptly() throws Exception {
-        PdSubscriber subscriber = new PdSubscriber(9902, "127.0.0.1", 0);
-        subscriber.start();
-        Thread.sleep(100);
-
-        long elapsed = timedClose(subscriber::close);
-
-        assertThat(elapsed)
-            .as("PdSubscriber.close() should not block on socket timeout")
-            .isLessThan(MAX_CLOSE_MS);
-    }
-
-    @Test
-    void testPdSubscriberListenerThreadDiesAfterClose() throws Exception {
-        int comId = 9903;
-        PdSubscriber subscriber = new PdSubscriber(comId, "127.0.0.1", 0);
-        subscriber.start();
-        Thread.sleep(100);
-
-        assertThat(findThreadsByPrefix("PD-Subscriber-" + comId))
-            .as("Listener thread should be running before close")
-            .isNotEmpty();
-
-        subscriber.close();
-        Thread.sleep(200);
-
-        assertThat(findThreadsByPrefix("PD-Subscriber-" + comId))
-            .as("Listener thread should be dead after close")
+        assertThat(findThreadsByPrefix("PD-Session-Send-" + port))
+            .as("Send thread should be dead after close")
             .isEmpty();
     }
 

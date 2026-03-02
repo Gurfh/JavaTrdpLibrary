@@ -163,10 +163,10 @@ import com.trdp.pd.PdPublisherHandle;
 import com.trdp.pd.PdRequester;
 
 // Publisher session: listens for pull requests and replies
-try (TrdpPdSession pubSession = new TrdpPdSession(17224)) {
-    PdPublisherHandle pub = pubSession.addPublisher(1000, "239.255.0.1", 17224, 0);
+try (TrdpPdSession session = new TrdpPdSession(17224)) {
+    PdPublisherHandle pub = session.addPublisher(1000, "239.255.0.1", 17224, 0);
     pub.putData("Pull me!".getBytes());
-    pubSession.start();
+    session.start();
 
     // Requester: sends a pull request, asking for reply to a multicast group
     try (PdRequester requester = new PdRequester(0)) {

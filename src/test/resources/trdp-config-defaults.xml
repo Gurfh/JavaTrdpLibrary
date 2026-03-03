@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<device host-name="defaultDev">
+  <bus-interface-list>
+    <bus-interface network-id="1" name="eth0">
+      <trdp-process/>
+      <pd-com-parameter/>
+      <md-com-parameter/>
+    </bus-interface>
+  </bus-interface-list>
+</device>

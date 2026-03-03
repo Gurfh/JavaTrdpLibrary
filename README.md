@@ -44,6 +44,13 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Timeout management
   - Proper reply routing with ReplyComId and ReplyIpAddress
 
+- **XML Configuration**
+  - Load device configuration from IEC 61375-2-3 XML files (`TrdpConfig.load()`)
+  - XSD validation against `trdp-config.xsd` before parsing
+  - Immutable POJO data model covering all standard elements (bus interfaces, telegrams, data sets, com parameters, services, mapped devices)
+  - XXE attack prevention
+  - Convenience lookups: `getDataSetById()`, `getComParameterById()`
+
 - **Production-Ready Features**
   - Comprehensive unit and integration tests (300+ tests)
   - Thread-safe implementation
@@ -274,6 +281,44 @@ try (MdReplier replier = new MdReplier(17226, handler, 3_000_000)) {
 }
 ```
 
+### XML Configuration
+
+Load device configuration from standard TRDP XML files:
+
+```java
+import com.trdp.config.TrdpConfig;
+import com.trdp.config.DeviceConfig;
+import com.trdp.config.BusInterface;
+import com.trdp.config.TelegramConfig;
+import com.trdp.config.DataSetDefinition;
+
+import java.nio.file.Path;
+
+// Load and validate against XSD
+DeviceConfig config = TrdpConfig.load(Path.of("trdp-config.xml"));
+
+// Or from an InputStream
+DeviceConfig config2 = TrdpConfig.load(getClass().getResourceAsStream("/trdp-config.xml"));
+
+// Access device-level attributes
+System.out.println("Host: " + config.getHostName());
+
+// Iterate bus interfaces and their telegrams
+for (BusInterface bi : config.getBusInterfaces()) {
+    System.out.println("Interface: " + bi.getName() + " (" + bi.getHostIp() + ")");
+    for (TelegramConfig telegram : bi.getTelegrams()) {
+        System.out.println("  ComID " + telegram.getComId() + " type=" + telegram.getType());
+    }
+}
+
+// Lookup helpers (first-found-wins)
+config.getDataSetById(1001).ifPresent(ds ->
+    System.out.println("DataSet: " + ds.getName() + " with " + ds.getElements().size() + " elements"));
+
+config.getComParameterById(1).ifPresent(cp ->
+    System.out.println("ComParam: qos=" + cp.getQos() + " ttl=" + cp.getTtl()));
+```
+
 ### Working with Structured Data (TRDP Data Types)
 
 #### Using TrdpDataset with Process Data
@@ -478,6 +523,13 @@ com.trdp
 │   ├── MdReplier       # MD replier implementation
 │   ├── MdReply         # MD reply data structure
 │   └── MdRequestHandler # Request handler interface
+├── config           # XML configuration parser
+│   ├── TrdpConfig        # Static load() with XSD validation + Jackson XML
+│   ├── DeviceConfig      # Root config POJO (bus interfaces, data sets, etc.)
+│   ├── BusInterface      # Network interface config (telegrams, PD/MD params)
+│   ├── TelegramConfig    # Telegram definition (ComID, sources, destinations)
+│   ├── DataSetDefinition # Data set with typed elements
+│   └── ...               # 30+ POJOs covering the full IEC 61375-2-3 XML schema
 ├── util             # Data type utilities
 │   ├── TrdpDataType    # Data type enumeration
 │   ├── TrdpEncoder     # Type-safe data encoder

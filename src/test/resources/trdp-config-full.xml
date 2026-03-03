@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<device host-name="CST_VCU" type="VCU_C" leader-name="CST_lead">
+  <device-configuration memory-size="8388608">
+    <mem-block-list>
+      <mem-block size="128" preallocate="10"/>
+      <mem-block size="1480" preallocate="5"/>
+    </mem-block-list>
+  </device-configuration>
+  <debug file-name="/tmp/trdp.log" file-size="131072" level="W" info="AFC"/>
+  <bus-interface-list>
+    <bus-interface network-id="1" name="eth0" host-ip="10.0.1.100" leader-ip="10.0.1.1">
+      <trdp-process cycle-time="5000" blocking="yes" traffic-shaping="on" priority="128"/>
+      <pd-com-parameter timeout-value="200000" validity-behavior="keep" ttl="32" qos="3" marshall="on" callback="always" port="17300"/>
+      <md-com-parameter confirm-timeout="2000000" reply-timeout="3000000" connect-timeout="30000000"
+                        ttl="32" qos="5" retries="1" protocol="TCP" marshall="on" callback="on"
+                        udp-port="17400" tcp-port="17401" num-sessions="500"/>
+      <telegram com-id="1000" data-set-id="1001" com-parameter-id="1" name="pdTest" type="source" create="on">
+        <pd-parameter cycle="50000" timeout="150000" validity-behavior="keep" redundant="1" marshall="on" callback="always"/>
+        <source id="1" uri1="10.0.1.100" uri2="10.0.1.101" name="src1">
+          <sdt-parameter smi1="100" smi2="200" udv="256" rx-period="50" tx-period="50" n-rxsafe="5" n-guard="200" cm-thr="50" lmi-max="60"/>
+        </source>
+        <destination id="2" uri="239.255.1.1" name="dst1">
+          <sdtv4-parameter smi1="300" udv-main="1" rx-period="100" tx-period="100"/>
+        </destination>
+      </telegram>
+      <telegram com-id="2000" name="mdTest" type="sink">
+        <md-parameter confirm-timeout="3000000" reply-timeout="6000000" marshall="on" callback="on" protocol="TCP"/>
+        <source id="10" uri1="10.0.2.100"/>
+        <destination id="20" uri="10.0.2.200"/>
+      </telegram>
+    </bus-interface>
+    <bus-interface network-id="2" name="eth1">
+      <telegram com-id="3000" data-set-id="1002" type="source-sink" create="off">
+        <pd-parameter cycle="100000"/>
+        <sdtv4-srv-inst-parameter instance-id="1" smi1="500" udv-main="2" rx-period="50" tx-period="50"/>
+        <sdtv4-srv-inst-parameter instance-id="2" smi1="501" udv-main="2" rx-period="50" tx-period="50"/>
+      </telegram>
+    </bus-interface>
+  </bus-interface-list>
+  <mapped-device-list>
+    <mapped-device host-name="remoteA" leader-name="remoteLead">
+      <mapped-bus-interface name="eth0" host-ip="10.0.2.50">
+        <mapped-telegram com-id="1000" name="pdMapped">
+          <mapped-pd-parameter offset-address="128"/>
+          <mapped-source id="1" uri1="10.0.2.50" uri2="10.0.2.51" name="mSrc">
+            <mapped-sdt-parameter smi1="400" smi2="401"/>
+          </mapped-source>
+          <mapped-destination id="2" uri="239.255.2.1" name="mDst">
+            <mapped-sdt-parameter smi1="500"/>
+          </mapped-destination>
+        </mapped-telegram>
+      </mapped-bus-interface>
+    </mapped-device>
+  </mapped-device-list>
+  <data-set-list>
+    <data-set id="1001" name="StatusDataSet">
+      <element type="UINT32" name="speed" array-size="1" unit="km/h" scale="0.1" offset="0"/>
+      <element type="INT16" name="temperature" array-size="3"/>
+      <element type="BOOL8" name="doorOpen"/>
+    </data-set>
+    <data-set id="1002" name="DiagDataSet">
+      <element type="UINT8" name="errorCode"/>
+      <element type="1001" name="nested" array-size="2"/>
+    </data-set>
+  </data-set-list>
+  <com-parameter-list>
+    <com-parameter id="1" qos="5" ttl="32" retries="3"/>
+    <com-parameter id="2" qos="3"/>
+  </com-parameter-list>
+  <service-list>
+    <service name="DiagService" id="100" ttl="30000" dummyService="off">
+      <event id="1" com-id="5000" type="MD" name="diagEvent"/>
+      <field id="1" com-id="5001" name="diagField"/>
+      <method id="1" com-id="5002" reply-com-id="5003" confirm="on" name="getDiag"/>
+      <service-device src-uri="10.0.1.100" dst-uri="10.0.1.200" red-uri="10.0.1.201">
+        <instance id="1" dst-uri="10.0.1.200" name="inst1"/>
+        <instance id="2" dst-uri="10.0.1.201" name="inst2"/>
+      </service-device>
+      <telegramRef id="1" com-id="5000" src-id="1" dst-id="2"/>
+    </service>
+  </service-list>
+</device>

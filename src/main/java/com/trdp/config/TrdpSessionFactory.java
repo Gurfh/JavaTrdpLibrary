@@ -1,14 +1,25 @@
 package com.trdp.config;
 
+import com.trdp.md.MdReplier;
+import com.trdp.md.MdRequest;
+import com.trdp.md.MdRequestHandler;
+import com.trdp.md.MdRequester;
+import com.trdp.md.MdReply;
+import com.trdp.md.MdResponse;
+import com.trdp.md.TransportProtocol;
 import com.trdp.pd.PdEventListener;
 import com.trdp.pd.PdPublisherHandle;
 import com.trdp.pd.PdSubscriberHandle;
 import com.trdp.pd.TrdpPdSession;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Factory that creates fully configured TRDP sessions from a parsed
@@ -31,6 +42,7 @@ import java.util.Map;
  */
 public class TrdpSessionFactory {
 
+    private static final Logger logger = LoggerFactory.getLogger(TrdpSessionFactory.class);
     private static final String DEFAULT_MULTICAST = "239.255.0.1";
 
     private TrdpSessionFactory() {
@@ -54,8 +66,16 @@ public class TrdpSessionFactory {
             PdEventListener listener) throws IOException {
 
         DatasetMarshaller marshaller = DatasetMarshaller.from(config);
-        int port = (int) busInterface.getPdComParameter().getPort();
-        TrdpPdSession session = new TrdpPdSession(port);
+        PdComParameter pdCom = busInterface.getPdComParameter();
+        int port = (int) pdCom.getPort();
+
+        InetAddress bindAddress = busInterface.getHostIp() != null
+                ? InetAddress.getByName(busInterface.getHostIp()) : null;
+        int ttl = (int) pdCom.getTtl();
+        int qos = (int) pdCom.getQos();
+
+        TrdpPdSession session = new TrdpPdSession(port, bindAddress, ttl, qos);
+        session.setTrafficShapingEnabled(busInterface.getTrdpProcess().isTrafficShaping());
 
         Map<Integer, PdPublisherHandle> publishers = new LinkedHashMap<>();
         Map<Integer, PdSubscriberHandle> subscribers = new LinkedHashMap<>();
@@ -66,6 +86,19 @@ public class TrdpSessionFactory {
 
             int comId = (int) telegram.getComId();
             String type = telegram.getType();
+
+            // Phase 4: warn if per-telegram ComParameter differs from interface-level
+            Long comParamId = telegram.getComParameterId();
+            if (comParamId != null && comParamId > 0) {
+                config.getComParameterById(comParamId).ifPresent(cp -> {
+                    if (cp.getQos() != qos || cp.getTtl() != ttl) {
+                        logger.warn("PD telegram ComID {} has com-parameter-id {} with "
+                                        + "QoS={}/TTL={} differing from interface-level QoS={}/TTL={}. "
+                                        + "Shared socket uses interface-level values.",
+                                comId, comParamId, cp.getQos(), cp.getTtl(), qos, ttl);
+                    }
+                });
+            }
 
             boolean isSource = "source".equalsIgnoreCase(type)
                     || "source-sink".equalsIgnoreCase(type);
@@ -92,7 +125,7 @@ public class TrdpSessionFactory {
                 }
                 long timeout = pd.getTimeout() > 0
                         ? pd.getTimeout()
-                        : busInterface.getPdComParameter().getTimeoutValue();
+                        : pdCom.getTimeoutValue();
                 PdSubscriberHandle sub = session.addSubscriber(comId, srcIp, timeout, listener);
                 subscribers.put(comId, sub);
             }
@@ -191,6 +224,218 @@ public class TrdpSessionFactory {
         @Override
         public void close() throws Exception {
             session.close();
+        }
+    }
+
+    // ==================== MD Factory ====================
+
+    /**
+     * Creates a configured MD session from a bus interface definition.
+     * <p>
+     * Creates an {@link MdRequester} and {@link MdReplier} wired with interface-level
+     * socket options (host-ip, TTL, QoS) and per-telegram overrides from
+     * {@link MdParameter} and {@link ComParameter}.
+     *
+     * @param config       the parsed device configuration (for dataset resolution)
+     * @param busInterface the bus interface to configure
+     * @param handler      the request handler for the replier
+     * @return a configured MD session with requester, replier, and marshaller
+     * @throws IOException if socket creation fails
+     */
+    public static ConfiguredMdSession configureMd(
+            DeviceConfig config, BusInterface busInterface,
+            MdRequestHandler handler) throws IOException {
+
+        DatasetMarshaller marshaller = DatasetMarshaller.from(config);
+        MdComParameter mdCom = busInterface.getMdComParameter();
+
+        InetAddress bindAddress = busInterface.getHostIp() != null
+                ? InetAddress.getByName(busInterface.getHostIp()) : null;
+        int ttl = (int) mdCom.getTtl();
+        int qos = (int) mdCom.getQos();
+
+        int udpPort = (int) mdCom.getUdpPort();
+        int tcpPort = (int) mdCom.getTcpPort();
+        long replyTimeoutUs = mdCom.getReplyTimeout();
+        long connectTimeoutUs = mdCom.getConnectTimeout();
+        long confirmTimeoutUs = mdCom.getConfirmTimeout();
+
+        TransportProtocol defaultProtocol = "TCP".equalsIgnoreCase(mdCom.getProtocol())
+                ? TransportProtocol.TCP : TransportProtocol.UDP;
+        int defaultRetries = (int) mdCom.getRetries();
+
+        MdRequester requester = new MdRequester(udpPort, replyTimeoutUs, connectTimeoutUs,
+                bindAddress, ttl, qos);
+        MdReplier replier = new MdReplier(tcpPort, handler, confirmTimeoutUs,
+                bindAddress, ttl, qos);
+
+        Map<Integer, MdTelegramConfig> telegramConfigs = new LinkedHashMap<>();
+
+        for (TelegramConfig telegram : busInterface.getTelegrams()) {
+            MdParameter md = telegram.getMdParameter();
+            if (md == null) continue;
+
+            int comId = (int) telegram.getComId();
+
+            // Start with interface-level defaults
+            long perReplyTimeout = replyTimeoutUs;
+            long perConfirmTimeout = confirmTimeoutUs;
+            TransportProtocol perProtocol = defaultProtocol;
+            int perRetries = defaultRetries;
+
+            // Apply per-telegram MdParameter overrides
+            if (md.getReplyTimeout() > 0) {
+                perReplyTimeout = md.getReplyTimeout();
+            }
+            if (md.getConfirmTimeout() > 0) {
+                perConfirmTimeout = md.getConfirmTimeout();
+            }
+            if (md.getProtocol() != null && !md.getProtocol().isEmpty()) {
+                perProtocol = "TCP".equalsIgnoreCase(md.getProtocol())
+                        ? TransportProtocol.TCP : TransportProtocol.UDP;
+            }
+
+            // Phase 4: apply per-telegram ComParameter overrides
+            Long comParamId = telegram.getComParameterId();
+            if (comParamId != null && comParamId > 0) {
+                final long prt = perReplyTimeout;
+                final TransportProtocol pp = perProtocol;
+                config.getComParameterById(comParamId).ifPresent(cp -> {
+                    if (cp.getQos() != qos || cp.getTtl() != ttl) {
+                        logger.warn("MD telegram ComID {} has com-parameter-id {} with "
+                                        + "QoS={}/TTL={} differing from interface-level QoS={}/TTL={}. "
+                                        + "Shared UDP socket uses interface-level values; "
+                                        + "TCP connections will use per-ComParameter values for new connections.",
+                                comId, comParamId, cp.getQos(), cp.getTtl(), qos, ttl);
+                    }
+                });
+                // Override retries from ComParameter
+                int cpRetries = config.getComParameterById(comParamId)
+                        .map(cp -> (int) cp.getRetries()).orElse(perRetries);
+                perRetries = Math.min(cpRetries, 2); // clamp to 0..2
+            }
+
+            telegramConfigs.put(comId, new MdTelegramConfig(
+                    perReplyTimeout, perConfirmTimeout, perProtocol, perRetries));
+        }
+
+        return new ConfiguredMdSession(requester, replier, marshaller, telegramConfigs);
+    }
+
+    /**
+     * Per-telegram MD configuration resolved from XML.
+     */
+    public record MdTelegramConfig(
+            long replyTimeoutUs,
+            long confirmTimeoutUs,
+            TransportProtocol protocol,
+            int maxRetries
+    ) {}
+
+    /**
+     * An MD session configured from XML with an {@link MdRequester}, {@link MdReplier},
+     * a {@link DatasetMarshaller}, and per-telegram configuration.
+     */
+    public static class ConfiguredMdSession implements AutoCloseable {
+
+        private final MdRequester requester;
+        private final MdReplier replier;
+        private final DatasetMarshaller marshaller;
+        private final Map<Integer, MdTelegramConfig> telegramConfigs;
+
+        ConfiguredMdSession(MdRequester requester, MdReplier replier,
+                            DatasetMarshaller marshaller,
+                            Map<Integer, MdTelegramConfig> telegramConfigs) {
+            this.requester = requester;
+            this.replier = replier;
+            this.marshaller = marshaller;
+            this.telegramConfigs = Collections.unmodifiableMap(telegramConfigs);
+        }
+
+        /**
+         * Starts the replier (begins accepting requests).
+         */
+        public void start() {
+            replier.start();
+        }
+
+        /**
+         * Returns the underlying requester for advanced operations.
+         */
+        public MdRequester getRequester() {
+            return requester;
+        }
+
+        /**
+         * Returns the underlying replier for advanced operations.
+         */
+        public MdReplier getReplier() {
+            return replier;
+        }
+
+        /**
+         * Returns the dataset marshaller.
+         */
+        public DatasetMarshaller getMarshaller() {
+            return marshaller;
+        }
+
+        /**
+         * Returns per-telegram configurations, keyed by ComID.
+         */
+        public Map<Integer, MdTelegramConfig> getTelegramConfigs() {
+            return telegramConfigs;
+        }
+
+        /**
+         * Sends an MD request using per-telegram configuration.
+         * <p>
+         * If a dataset schema exists for the given ComID, values are auto-marshalled.
+         * The per-telegram protocol, timeout, and retries from XML config are applied.
+         *
+         * @param comId              the communication ID
+         * @param values             field name to value mapping (marshalled if schema exists)
+         * @param destinationAddress the destination IP address
+         * @param destinationPort    the destination port
+         * @return a future that completes with the reply
+         */
+        public CompletableFuture<MdReply> sendRequest(int comId, Map<String, Object> values,
+                                                       String destinationAddress, int destinationPort) {
+            byte[] data = marshaller.hasSchema(comId)
+                    ? marshaller.marshall(comId, values)
+                    : new byte[0];
+
+            MdTelegramConfig cfg = telegramConfigs.get(comId);
+            if (cfg != null) {
+                return requester.sendRequest(comId, data, destinationAddress, destinationPort,
+                        cfg.protocol(), null, null, cfg.replyTimeoutUs(), cfg.maxRetries());
+            }
+            return requester.sendRequest(comId, data, destinationAddress, destinationPort);
+        }
+
+        /**
+         * Sends an MD request with raw byte payload using per-telegram configuration.
+         *
+         * @param comId              the communication ID
+         * @param data               the raw payload bytes
+         * @param destinationAddress the destination IP address
+         * @param destinationPort    the destination port
+         * @return a future that completes with the reply
+         */
+        public CompletableFuture<MdReply> sendRequest(int comId, byte[] data,
+                                                       String destinationAddress, int destinationPort) {
+            MdTelegramConfig cfg = telegramConfigs.get(comId);
+            if (cfg != null) {
+                return requester.sendRequest(comId, data, destinationAddress, destinationPort,
+                        cfg.protocol(), null, null, cfg.replyTimeoutUs(), cfg.maxRetries());
+            }
+            return requester.sendRequest(comId, data, destinationAddress, destinationPort);
+        }
+
+        @Override
+        public void close() {
+            requester.close();
+            replier.close();
         }
     }
 }

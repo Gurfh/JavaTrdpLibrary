@@ -8,23 +8,59 @@ import java.net.*;
 
 public class UdpTransport implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(UdpTransport.class);
-    
+
     private final MulticastSocket socket;
     private final int port;
-    
+
+    /**
+     * Converts a QoS value (IP Precedence 0..7) to the traffic class byte
+     * for {@link java.net.DatagramSocket#setTrafficClass(int)}.
+     * <p>
+     * IP Precedence occupies bits 7-5 of the TOS/DSCP byte.
+     *
+     * @param qos QoS value (0..7)
+     * @return traffic class byte with IP Precedence in bits 7-5
+     */
+    public static int qosToTrafficClass(int qos) {
+        return (qos & 0x07) << 5;
+    }
+
     public UdpTransport() throws IOException {
         this(0);
     }
-    
+
     public UdpTransport(int port) throws IOException {
+        this(port, null, 64, 0);
+    }
+
+    /**
+     * Creates a UDP transport with custom socket options.
+     *
+     * @param port         the UDP port to bind to (0 for ephemeral)
+     * @param bindAddress  the local address to bind to, or {@code null} for wildcard
+     * @param ttl          the IP time-to-live for outgoing packets
+     * @param trafficClass the IP traffic class byte (use {@link #qosToTrafficClass(int)} to convert from QoS)
+     * @throws IOException if socket creation fails
+     */
+    public UdpTransport(int port, InetAddress bindAddress, int ttl, int trafficClass) throws IOException {
         this.port = port;
-        this.socket = new MulticastSocket(port);
-        this.socket.setReuseAddress(true);
-        
-        if (port > 0) {
-            logger.debug("UDP Transport created on port {}", port);
+        if (bindAddress != null) {
+            this.socket = new MulticastSocket(new InetSocketAddress(bindAddress, port));
         } else {
-            logger.debug("UDP Transport created on ephemeral port {}", socket.getLocalPort());
+            this.socket = new MulticastSocket(port);
+        }
+        this.socket.setReuseAddress(true);
+        this.socket.setTimeToLive(ttl);
+        if (trafficClass != 0) {
+            this.socket.setTrafficClass(trafficClass);
+        }
+
+        if (port > 0) {
+            logger.debug("UDP Transport created on port {} (ttl={}, tc=0x{}))",
+                    port, ttl, Integer.toHexString(trafficClass));
+        } else {
+            logger.debug("UDP Transport created on ephemeral port {} (ttl={}, tc=0x{})",
+                    socket.getLocalPort(), ttl, Integer.toHexString(trafficClass));
         }
     }
     
@@ -86,6 +122,24 @@ public class UdpTransport implements AutoCloseable {
     
     public int getLocalPort() {
         return socket.getLocalPort();
+    }
+
+    /**
+     * Returns the IP time-to-live value configured on this socket.
+     *
+     * @throws IOException if the socket option cannot be read
+     */
+    public int getTimeToLive() throws IOException {
+        return socket.getTimeToLive();
+    }
+
+    /**
+     * Returns the IP traffic class byte configured on this socket.
+     *
+     * @throws java.net.SocketException if the socket option cannot be read
+     */
+    public int getTrafficClass() throws java.net.SocketException {
+        return socket.getTrafficClass();
     }
     
     @Override

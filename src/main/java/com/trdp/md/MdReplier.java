@@ -15,6 +15,7 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
@@ -58,11 +59,32 @@ public class MdReplier implements AutoCloseable {
     }
 
     public MdReplier(int port, MdRequestHandler handler, long confirmTimeoutUs) throws IOException {
+        this(port, handler, confirmTimeoutUs, null, 64, 3);
+    }
+
+    /**
+     * Creates an MD replier with custom socket options.
+     *
+     * @param port             the port to listen on (UDP and TCP)
+     * @param handler          the request handler callback
+     * @param confirmTimeoutUs the confirmation timeout in microseconds
+     * @param bindAddress      the local address to bind to, or {@code null} for wildcard
+     * @param ttl              the IP time-to-live for outgoing packets
+     * @param qos              the QoS value (IP Precedence 0..7)
+     * @throws IOException if socket creation fails
+     */
+    public MdReplier(int port, MdRequestHandler handler, long confirmTimeoutUs,
+                     InetAddress bindAddress, int ttl, int qos) throws IOException {
         this.confirmTimeoutUs = confirmTimeoutUs;
         this.pendingConfirmations = new ConcurrentHashMap<>();
-        this.udpTransport = new UdpTransport(port);
+        this.udpTransport = new UdpTransport(port, bindAddress, ttl, UdpTransport.qosToTrafficClass(qos));
         try {
-            this.tcpListener = new ServerSocket(port);
+            if (bindAddress != null) {
+                this.tcpListener = new ServerSocket();
+                this.tcpListener.bind(new InetSocketAddress(bindAddress, port));
+            } else {
+                this.tcpListener = new ServerSocket(port);
+            }
         } catch (IOException e) {
             udpTransport.close();
             throw e;

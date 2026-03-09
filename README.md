@@ -34,6 +34,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Sequence counter validation per IEC 61375-2-3 (duplicate/old packet rejection, gap detection, sender restart handling)
   - Topology counter validation per IEC 61375-2-3 Table A.5 (ETB/OpTrn with wildcard support)
   - Configurable ComIDs and timeouts
+  - Configurable socket options: bind address, TTL, QoS (IP Precedence)
   - Structured data payloads with TrdpDataset
 
 - **Message Data (MD) Support**
@@ -43,6 +44,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Asynchronous communication with CompletableFuture
   - Configurable request handlers
   - Timeout management
+  - Configurable socket options: bind address, TTL, QoS (IP Precedence)
   - Proper reply routing with ReplyComId and ReplyIpAddress
 
 - **XML Configuration**
@@ -52,12 +54,14 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - `DatasetMarshaller` for automatic ComID-based encode/decode using dataset definitions
   - Supports both numeric type IDs (`type="8"`) and type names (`type="UINT8"`) in dataset elements
   - Nested dataset references and array elements
-  - `TrdpSessionFactory` wires XML telegram definitions into PD sessions
+  - `TrdpSessionFactory` wires XML telegram definitions into PD and MD sessions
+  - Full config wiring: `host-ip` (bind address), `ttl`, `qos`, `traffic-shaping` applied from XML
+  - Per-telegram overrides: `com-parameter-id`, `md-parameter` protocol/timeout/retries
   - XXE attack prevention
   - Convenience lookups: `getDataSetById()`, `getComParameterById()`
 
 - **Production-Ready Features**
-  - Comprehensive unit and integration tests (270+ tests)
+  - Comprehensive unit and integration tests (290+ tests)
   - Thread-safe implementation
   - Proper resource management with AutoCloseable
   - SLF4J logging integration
@@ -354,6 +358,71 @@ try (ConfiguredPdSession session = TrdpSessionFactory.configurePd(config, bi, ev
 }
 ```
 
+#### Config-Driven MD Session
+
+Use `TrdpSessionFactory` to wire XML MD telegram definitions into a requester/replier pair:
+
+```java
+import com.trdp.config.TrdpSessionFactory;
+import com.trdp.config.TrdpSessionFactory.ConfiguredMdSession;
+
+DeviceConfig config = TrdpConfig.load(Path.of("trdp-config.xml"));
+BusInterface bi = config.getBusInterfaces().get(0);
+
+try (ConfiguredMdSession session = TrdpSessionFactory.configureMd(config, bi, request -> {
+    System.out.println("Received MD request ComID " + request.getComId());
+    return new MdResponse("Reply".getBytes());
+})) {
+    session.start();
+
+    // Send with per-telegram protocol/timeout/retries from XML config
+    CompletableFuture<MdReply> future = session.sendRequest(
+        2000,                    // ComID (protocol, timeout, retries resolved from XML)
+        Map.of("errorCode", 42), // Auto-marshalled if dataset schema exists
+        "192.168.1.100",         // Destination IP
+        17225                    // Destination port
+    );
+
+    // Or send raw bytes
+    CompletableFuture<MdReply> raw = session.sendRequest(
+        2000, "raw payload".getBytes(), "192.168.1.100", 17225);
+}
+```
+
+#### Custom Socket Options
+
+All session and transport constructors accept optional bind address, TTL, and QoS:
+
+```java
+import java.net.InetAddress;
+
+// PD session with custom TTL and QoS
+try (TrdpPdSession session = new TrdpPdSession(17224,
+        InetAddress.getByName("10.0.1.100"), // Bind to specific interface
+        32,                                   // TTL
+        3)) {                                 // QoS (IP Precedence 0..7)
+    // ...
+}
+
+// MD requester with custom socket options
+try (MdRequester requester = new MdRequester(17225,
+        5_000_000, 60_000_000,               // Reply and connect timeouts
+        InetAddress.getByName("10.0.1.100"), // Bind address
+        32,                                   // TTL
+        5)) {                                 // QoS
+    // TCP connections also inherit bind address and traffic class
+}
+
+// MD replier with custom socket options
+try (MdReplier replier = new MdReplier(17225, handler,
+        1_000_000,                            // Confirm timeout
+        InetAddress.getByName("10.0.1.100"), // Bind address
+        32,                                   // TTL
+        5)) {                                 // QoS
+    replier.start();
+}
+```
+
 #### Standalone Dataset Marshalling
 
 Use `DatasetMarshaller` independently for encoding/decoding without a session:
@@ -580,7 +649,7 @@ com.trdp
 │   ├── TelegramConfig    # Telegram definition (ComID, sources, destinations)
 │   ├── DataSetDefinition # Data set with typed elements
 │   ├── DatasetMarshaller # ComID-based automatic encode/decode using dataset schemas
-│   ├── TrdpSessionFactory # Config-driven PD session wiring (ConfiguredPdSession)
+│   ├── TrdpSessionFactory # Config-driven PD/MD session wiring
 │   └── ...               # 30+ POJOs covering the full IEC 61375-2-3 XML schema
 ├── util             # Data type utilities
 │   ├── TrdpDataType    # Data type enumeration

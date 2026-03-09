@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 
@@ -319,5 +320,46 @@ class TcpTransportTest {
     void testConnectionRefused() {
         assertThatThrownBy(() -> new TcpTransport("127.0.0.1", 1))
             .isInstanceOf(IOException.class);
+    }
+
+    @Test
+    void testConnectWithBindAddress() throws Exception {
+        serverSocket = new ServerSocket(0);
+        int port = serverSocket.getLocalPort();
+
+        Thread acceptThread = new Thread(() -> {
+            try (Socket client = serverSocket.accept()) {
+                Thread.sleep(500);
+            } catch (Exception e) {
+                // ignore
+            }
+        });
+        acceptThread.start();
+
+        transport = new TcpTransport("127.0.0.1", port,
+                InetAddress.getLoopbackAddress(), UdpTransport.qosToTrafficClass(3));
+        assertThat(transport.isClosed()).isFalse();
+
+        acceptThread.join(3000);
+    }
+
+    @Test
+    void testConnectWithNullBindAddress() throws Exception {
+        serverSocket = new ServerSocket(0);
+        int port = serverSocket.getLocalPort();
+
+        Thread acceptThread = new Thread(() -> {
+            try (Socket client = serverSocket.accept()) {
+                Thread.sleep(500);
+            } catch (Exception e) {
+                // ignore
+            }
+        });
+        acceptThread.start();
+
+        transport = new TcpTransport("127.0.0.1", port, null, 0);
+        assertThat(transport.isClosed()).isFalse();
+
+        acceptThread.join(3000);
     }
 }

@@ -157,7 +157,7 @@ class TrdpConfigTest {
         BusInterface bi1 = config.getBusInterfaces().get(0);
         assertThat(bi1.getNetworkId()).isEqualTo(1);
         assertThat(bi1.getName()).isEqualTo("eth0");
-        assertThat(bi1.getHostIp()).isEqualTo("10.0.1.100");
+        assertThat(bi1.getHostIp()).isEqualTo("127.0.0.1");
         assertThat(bi1.getLeaderIp()).isEqualTo("10.0.1.1");
 
         // trdp-process

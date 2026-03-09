@@ -43,6 +43,18 @@ class TrdpPdSessionTest {
     }
 
     @Test
+    void testCreateSessionWithSocketOptions() throws Exception {
+        session = new TrdpPdSession(0, null, 32, 3);
+        assertThat(session.getPort()).isGreaterThan(0);
+    }
+
+    @Test
+    void testCreateSessionWithBindAddress() throws Exception {
+        session = new TrdpPdSession(0, InetAddress.getLoopbackAddress(), 64, 5);
+        assertThat(session.getPort()).isGreaterThan(0);
+    }
+
+    @Test
     void testAddPublisher() throws Exception {
         session = new TrdpPdSession(19101);
         PdPublisherHandle handle = session.addPublisher(1000, "127.0.0.1", 17224, 50_000);

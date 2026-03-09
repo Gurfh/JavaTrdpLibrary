@@ -49,6 +49,8 @@ public class MdRequester implements AutoCloseable {
 
     private final long replyTimeoutUs;
     private final long connectTimeoutUs;
+    private final InetAddress bindAddress;
+    private final int tcpTrafficClass;
     private final ConcurrentHashMap<String, Long> tcpLastUsedNanos;
     private final ScheduledExecutorService tcpIdleEvictor;
     private volatile ScheduledFuture<?> pendingEviction;
@@ -70,9 +72,64 @@ public class MdRequester implements AutoCloseable {
         this(localPort, replyTimeoutUs, TrdpConstants.DEFAULT_MD_CONNECT_TIMEOUT_US);
     }
 
+    /**
+     * Creates an MD requester with custom socket options.
+     *
+     * @param localPort        the local UDP port to bind to (0 for ephemeral)
+     * @param replyTimeoutUs   the default reply timeout in microseconds
+     * @param connectTimeoutUs the TCP connect/idle timeout in microseconds
+     * @param bindAddress      the local address to bind to, or {@code null} for wildcard
+     * @param ttl              the IP time-to-live for outgoing packets
+     * @param qos              the QoS value (IP Precedence 0..7)
+     * @throws IOException if socket creation or listener start fails
+     */
+    public MdRequester(int localPort, long replyTimeoutUs, long connectTimeoutUs,
+                       InetAddress bindAddress, int ttl, int qos) throws IOException {
+        this.replyTimeoutUs = replyTimeoutUs;
+        this.connectTimeoutUs = connectTimeoutUs;
+        this.bindAddress = bindAddress;
+        this.tcpTrafficClass = UdpTransport.qosToTrafficClass(qos);
+        this.udpTransport = new UdpTransport(localPort, bindAddress, ttl, this.tcpTrafficClass);
+        this.tcpConnections = new ConcurrentHashMap<>();
+        this.tcpLastUsedNanos = new ConcurrentHashMap<>();
+        this.sequenceCounter = new AtomicInteger(0);
+        this.pendingSessions = new ConcurrentHashMap<>();
+        this.tcpSessionTransports = new ConcurrentHashMap<>();
+        this.pendingRetries = new ConcurrentHashMap<>();
+        this.retryScheduler = createRetryScheduler();
+        this.running = true;
+
+        if (connectTimeoutUs > 0) {
+            this.tcpIdleEvictor = createTcpIdleEvictor();
+        } else {
+            this.tcpIdleEvictor = null;
+        }
+
+        startUdpReplyListener();
+
+        try {
+            if (!listenerReadyLatch.await(5, TimeUnit.SECONDS)) {
+                running = false;
+                shutdownEvictor();
+                udpTransport.close();
+                throw new IOException("MD Requester listener thread failed to start in time.");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            running = false;
+            shutdownEvictor();
+            udpTransport.close();
+            throw new IOException("Interrupted while waiting for listener to start", e);
+        }
+
+        logger.info("MD Requester created on port {}", localPort);
+    }
+
     public MdRequester(int localPort, long replyTimeoutUs, long connectTimeoutUs) throws IOException {
         this.replyTimeoutUs = replyTimeoutUs;
         this.connectTimeoutUs = connectTimeoutUs;
+        this.bindAddress = null;
+        this.tcpTrafficClass = 0;
         this.udpTransport = new UdpTransport(localPort);
         this.tcpConnections = new ConcurrentHashMap<>();
         this.tcpLastUsedNanos = new ConcurrentHashMap<>();
@@ -589,8 +646,8 @@ public class MdRequester implements AutoCloseable {
             throw new IOException("TCP connection pool exhausted (max " + MAX_TCP_CONNECTIONS + " connections)");
         }
 
-        // Create new connection
-        TcpTransport newTransport = new TcpTransport(host, port);
+        // Create new connection with stored socket options
+        TcpTransport newTransport = new TcpTransport(host, port, bindAddress, tcpTrafficClass);
         tcpConnections.put(key, newTransport);
         tcpLastUsedNanos.put(key, System.nanoTime());
         scheduleEvictionIfNeeded();

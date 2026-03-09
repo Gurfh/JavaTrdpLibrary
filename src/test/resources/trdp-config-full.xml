@@ -8,7 +8,7 @@
   </device-configuration>
   <debug file-name="/tmp/trdp.log" file-size="131072" level="W" info="AFC"/>
   <bus-interface-list>
-    <bus-interface network-id="1" name="eth0" host-ip="10.0.1.100" leader-ip="10.0.1.1">
+    <bus-interface network-id="1" name="eth0" host-ip="127.0.0.1" leader-ip="10.0.1.1">
       <trdp-process cycle-time="5000" blocking="yes" traffic-shaping="on" priority="128"/>
       <pd-com-parameter timeout-value="200000" validity-behavior="keep" ttl="32" qos="3" marshall="on" callback="always" port="17300"/>
       <md-com-parameter confirm-timeout="2000000" reply-timeout="3000000" connect-timeout="30000000"

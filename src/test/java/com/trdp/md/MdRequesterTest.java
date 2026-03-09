@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterEach;
 import static org.assertj.core.api.Assertions.*;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.util.concurrent.CompletableFuture;
 
 class MdRequesterTest {
@@ -33,6 +34,21 @@ class MdRequesterTest {
         
         assertThat(future).isNotNull();
         assertThat(future).isNotCompleted();
+    }
+
+    @Test
+    void testCreateRequesterWithSocketOptions() throws IOException {
+        requester = new MdRequester(0, 5_000_000, 60_000_000,
+                InetAddress.getLoopbackAddress(), 32, 5);
+        assertThat(requester).isNotNull();
+        assertThat(requester.getReplyTimeoutUs()).isEqualTo(5_000_000);
+        assertThat(requester.getConnectTimeoutUs()).isEqualTo(60_000_000);
+    }
+
+    @Test
+    void testCreateRequesterWithNullBindAddress() throws IOException {
+        requester = new MdRequester(0, 5_000_000, 60_000_000, null, 64, 3);
+        assertThat(requester).isNotNull();
     }
 
     @Test

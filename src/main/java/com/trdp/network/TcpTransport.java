@@ -9,6 +9,8 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
@@ -21,7 +23,30 @@ public class TcpTransport implements AutoCloseable {
     private DataInputStream dataIn;
 
     public TcpTransport(String host, int port) throws IOException {
-        this.socket = new Socket(host, port);
+        this(host, port, null, 0);
+    }
+
+    /**
+     * Creates a TCP transport with custom socket options.
+     *
+     * @param host         the remote host to connect to
+     * @param port         the remote port to connect to
+     * @param bindAddress  the local address to bind to, or {@code null} for any local address
+     * @param trafficClass the IP traffic class byte (use {@link UdpTransport#qosToTrafficClass(int)}
+     *                     to convert from QoS), or 0 to leave at OS default
+     * @throws IOException if connection fails
+     */
+    public TcpTransport(String host, int port, InetAddress bindAddress, int trafficClass) throws IOException {
+        if (bindAddress != null) {
+            this.socket = new Socket();
+            this.socket.bind(new InetSocketAddress(bindAddress, 0));
+            this.socket.connect(new InetSocketAddress(host, port));
+        } else {
+            this.socket = new Socket(host, port);
+        }
+        if (trafficClass != 0) {
+            this.socket.setTrafficClass(trafficClass);
+        }
         logger.info("TCP Transport connected to {}:{}", host, port);
     }
 

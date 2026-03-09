@@ -92,8 +92,21 @@ public class TrdpPdSession implements AutoCloseable {
      * @throws IOException If socket creation fails.
      */
     public TrdpPdSession(int port) throws IOException {
+        this(port, null, 64, 5);
+    }
+
+    /**
+     * Creates a PD session with custom socket options.
+     *
+     * @param port        The UDP port to bind to. Use 0 for an ephemeral port.
+     * @param bindAddress The local address to bind to, or {@code null} for wildcard.
+     * @param ttl         The IP time-to-live for outgoing packets.
+     * @param qos         The QoS value (IP Precedence 0..7).
+     * @throws IOException If socket creation fails.
+     */
+    public TrdpPdSession(int port, InetAddress bindAddress, int ttl, int qos) throws IOException {
         this.port = port;
-        this.transport = new UdpTransport(port);
+        this.transport = new UdpTransport(port, bindAddress, ttl, UdpTransport.qosToTrafficClass(qos));
         this.receiveExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "PD-Session-Recv-" + transport.getLocalPort());
             t.setDaemon(true);

@@ -263,6 +263,73 @@ class TrdpWiresharkIT {
                 .isNotZero();
     }
 
+    // ==================== PD TTL/QoS ====================
+
+    @Test
+    void tsharkVerifiesPdTtlAndQos() throws Exception {
+        int comId = 9000;
+        int customTtl = 32;
+        int customQos = 3; // IP Precedence 3 → trafficClass = 0x60 → DSCP = 24
+        byte[] payload = "TTL-QOS-TEST".getBytes(StandardCharsets.UTF_8);
+
+        Process tshark = startTshark(PD_PORT, 1);
+        Thread.sleep(1000);
+
+        pdSession = new TrdpPdSession(0, null, customTtl, customQos);
+        PdPublisherHandle pub = pdSession.addPublisher(comId, "127.0.0.1", PD_PORT, 0);
+        pub.putDataImmediate(payload);
+
+        List<JsonNode> packets = stopAndParse(tshark);
+
+        assertThat(packets).as("tshark should capture at least 1 TRDP PD packet").isNotEmpty();
+
+        JsonNode ip = ipLayer(packets.get(0));
+        assertThat(ip).as("IP layer should be present").isNotNull();
+
+        // Verify TTL
+        String ttlValue = fieldValue(ip, "ip.ip_ttl");
+        assertThat(ttlValue).as("IP TTL").isNotNull();
+        assertThat(Integer.parseInt(ttlValue)).isEqualTo(customTtl);
+
+        // Verify DSCP: trafficClass = qos << 5 = 0x60, DSCP = trafficClass >> 2 = 24
+        String dscpValue = fieldValue(ip, "ip.ip_dsfield_dscp");
+        assertThat(dscpValue).as("IP DSCP").isNotNull();
+        assertThat(Integer.parseInt(dscpValue)).isEqualTo((customQos << 5) >> 2);
+    }
+
+    // ==================== MD TTL/QoS ====================
+
+    @Test
+    void tsharkVerifiesMdTtlAndQos() throws Exception {
+        int comId = 9001;
+        int customTtl = 16;
+        int customQos = 5; // IP Precedence 5 → trafficClass = 0xA0 → DSCP = 40
+        byte[] payload = "MD-TTL-QOS".getBytes(StandardCharsets.UTF_8);
+
+        Process tshark = startTshark(MD_PORT, 1);
+        Thread.sleep(1000);
+
+        mdRequester = new MdRequester(0, 5_000_000, 60_000_000,
+                null, customTtl, customQos);
+        mdRequester.sendRequest(comId, payload, "127.0.0.1", MD_PORT,
+                TransportProtocol.UDP, null, null);
+
+        List<JsonNode> packets = stopAndParse(tshark);
+
+        assertThat(packets).as("tshark should capture at least 1 TRDP MD packet").isNotEmpty();
+
+        JsonNode ip = ipLayer(packets.get(0));
+        assertThat(ip).as("IP layer should be present").isNotNull();
+
+        String ttlValue = fieldValue(ip, "ip.ip_ttl");
+        assertThat(ttlValue).as("IP TTL").isNotNull();
+        assertThat(Integer.parseInt(ttlValue)).isEqualTo(customTtl);
+
+        String dscpValue = fieldValue(ip, "ip.ip_dsfield_dscp");
+        assertThat(dscpValue).as("IP DSCP").isNotNull();
+        assertThat(Integer.parseInt(dscpValue)).isEqualTo((customQos << 5) >> 2);
+    }
+
     // ==================== Helpers ====================
 
     /**
@@ -342,6 +409,16 @@ class TrdpWiresharkIT {
         if (layers.isMissingNode()) return null;
         JsonNode trdp = layers.path("trdp");
         return trdp.isMissingNode() ? null : trdp;
+    }
+
+    /**
+     * Extracts the {@code ip} layer from a tshark JSON packet element.
+     */
+    private JsonNode ipLayer(JsonNode packet) {
+        JsonNode layers = packet.path("_source").path("layers");
+        if (layers.isMissingNode()) return null;
+        JsonNode ip = layers.path("ip");
+        return ip.isMissingNode() ? null : ip;
     }
 
     /**

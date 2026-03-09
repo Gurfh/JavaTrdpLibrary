@@ -46,6 +46,35 @@ class UdpTransportTest {
     }
     
     @Test
+    void testCreateTransportWithCustomOptions() throws IOException {
+        transport = new UdpTransport(0, null, 32, UdpTransport.qosToTrafficClass(5));
+        assertThat(transport.getLocalPort()).isGreaterThan(0);
+        assertThat(transport.getTimeToLive()).isEqualTo(32);
+        assertThat(transport.getTrafficClass()).isEqualTo(UdpTransport.qosToTrafficClass(5));
+    }
+
+    @Test
+    void testCreateTransportWithBindAddress() throws IOException {
+        transport = new UdpTransport(0, InetAddress.getLoopbackAddress(), 64, 0);
+        assertThat(transport.getLocalPort()).isGreaterThan(0);
+        assertThat(transport.getTimeToLive()).isEqualTo(64);
+    }
+
+    @Test
+    void testDefaultTtlIs64() throws IOException {
+        transport = new UdpTransport(0);
+        assertThat(transport.getTimeToLive()).isEqualTo(64);
+    }
+
+    @Test
+    void testQosToTrafficClass() {
+        assertThat(UdpTransport.qosToTrafficClass(0)).isEqualTo(0x00);
+        assertThat(UdpTransport.qosToTrafficClass(3)).isEqualTo(0x60);
+        assertThat(UdpTransport.qosToTrafficClass(5)).isEqualTo(0xA0);
+        assertThat(UdpTransport.qosToTrafficClass(7)).isEqualTo(0xE0);
+    }
+
+    @Test
     void testReceiveTimeout() throws IOException {
         transport = new UdpTransport(18002);
         

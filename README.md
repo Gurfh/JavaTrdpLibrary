@@ -319,6 +319,51 @@ config.getComParameterById(1).ifPresent(cp ->
     System.out.println("ComParam: qos=" + cp.getQos() + " ttl=" + cp.getTtl()));
 ```
 
+#### Config-Driven PD Session
+
+Use `TrdpSessionFactory` to wire XML telegram definitions directly into a PD session:
+
+```java
+import com.trdp.config.TrdpSessionFactory;
+import com.trdp.config.TrdpSessionFactory.ConfiguredPdSession;
+import com.trdp.config.DatasetMarshaller;
+
+DeviceConfig config = TrdpConfig.load(Path.of("trdp-config.xml"));
+BusInterface bi = config.getBusInterfaces().get(0);
+
+try (ConfiguredPdSession session = TrdpSessionFactory.configurePd(config, bi, event -> {
+    // Decode received data using the dataset schema for this ComID
+    DatasetMarshaller m = session.getMarshaller();
+    if (m.hasSchema(event.getComId())) {
+        TrdpDataset data = m.unmarshall(event.getComId(), event.getData());
+        System.out.println("speed=" + data.getValue("speed"));
+    }
+})) {
+    session.start();
+
+    // Publish with automatic marshalling — fields encoded per dataset definition
+    session.putData(1000, Map.of("speed", 42L, "temperature[0]", (short) 25, "doorOpen", true));
+
+    // Or publish raw bytes
+    session.putData(1000, new byte[11]);
+}
+```
+
+#### Standalone Dataset Marshalling
+
+Use `DatasetMarshaller` independently for encoding/decoding without a session:
+
+```java
+DatasetMarshaller marshaller = DatasetMarshaller.from(config);
+
+// Encode
+byte[] payload = marshaller.marshall(1000, Map.of("speed", 100L, "doorOpen", true));
+
+// Decode
+TrdpDataset dataset = marshaller.unmarshall(1000, receivedBytes);
+long speed = (Long) dataset.getValue("speed");
+```
+
 ### Working with Structured Data (TRDP Data Types)
 
 #### Using TrdpDataset with Process Data
@@ -529,6 +574,8 @@ com.trdp
 │   ├── BusInterface      # Network interface config (telegrams, PD/MD params)
 │   ├── TelegramConfig    # Telegram definition (ComID, sources, destinations)
 │   ├── DataSetDefinition # Data set with typed elements
+│   ├── DatasetMarshaller # ComID-based automatic encode/decode using dataset schemas
+│   ├── TrdpSessionFactory # Config-driven PD session wiring (ConfiguredPdSession)
 │   └── ...               # 30+ POJOs covering the full IEC 61375-2-3 XML schema
 ├── util             # Data type utilities
 │   ├── TrdpDataType    # Data type enumeration

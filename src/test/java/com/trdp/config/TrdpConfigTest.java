@@ -100,6 +100,20 @@ class TrdpConfigTest {
         assertThat(mdCom.getProtocol()).isEqualTo("UDP");
         assertThat(mdCom.getUdpPort()).isEqualTo(17225);
         assertThat(mdCom.getTcpPort()).isEqualTo(17225);
+
+        // bus-interface without trdp-process, pd-com-parameter, md-com-parameter elements
+        BusInterface bi2 = config.getBusInterfaces().get(1);
+        assertThat(bi2.getNetworkId()).isEqualTo(2);
+        assertThat(bi2.getName()).isEqualTo("eth1");
+        assertThat(bi2.getTrdpProcess()).isNotNull();
+        assertThat(bi2.getTrdpProcess().getCycleTime()).isEqualTo(10000);
+        assertThat(bi2.getTrdpProcess().getPriority()).isEqualTo(64);
+        assertThat(bi2.getPdComParameter()).isNotNull();
+        assertThat(bi2.getPdComParameter().getPort()).isEqualTo(17224);
+        assertThat(bi2.getPdComParameter().getTimeoutValue()).isEqualTo(100000);
+        assertThat(bi2.getMdComParameter()).isNotNull();
+        assertThat(bi2.getMdComParameter().getUdpPort()).isEqualTo(17225);
+        assertThat(bi2.getMdComParameter().getReplyTimeout()).isEqualTo(5000000);
     }
 
     // --- Full parse verification ---

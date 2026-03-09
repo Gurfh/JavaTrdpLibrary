@@ -10,7 +10,9 @@ import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlProperty;
  * Configuration for a single network bus interface ({@code <bus-interface>} element).
  * <p>
  * Each bus interface has a network ID (1..4), an optional host IP for static addressing,
- * optional TRDP process settings, PD/MD communication parameters, and a list of telegrams.
+ * TRDP process settings, PD/MD communication parameters, and a list of telegrams.
+ * Process, PD, and MD configuration are never null — if absent from XML, fully-defaulted
+ * instances with IEC 61375-2-3 standard defaults are used.
  *
  * @see DeviceConfig#getBusInterfaces()
  * @see TelegramConfig
@@ -40,9 +42,12 @@ public class BusInterface {
         this.name = name;
         this.hostIp = hostIp;
         this.leaderIp = leaderIp;
-        this.trdpProcess = trdpProcess;
-        this.pdComParameter = pdComParameter;
-        this.mdComParameter = mdComParameter;
+        this.trdpProcess = trdpProcess != null ? trdpProcess
+                : new TrdpProcessConfig(null, null, null, null, null);
+        this.pdComParameter = pdComParameter != null ? pdComParameter
+                : new PdComParameter(null, null, null, null, null, null, null);
+        this.mdComParameter = mdComParameter != null ? mdComParameter
+                : new MdComParameter(null, null, null, null, null, null, null, null, null, null, null, null);
         this.telegrams = telegrams != null ? Collections.unmodifiableList(telegrams) : Collections.emptyList();
     }
 

@@ -6,5 +6,7 @@
       <pd-com-parameter/>
       <md-com-parameter/>
     </bus-interface>
+    <bus-interface network-id="2" name="eth1">
+    </bus-interface>
   </bus-interface-list>
 </device>

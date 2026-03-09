@@ -145,27 +145,38 @@ public class DatasetMarshaller {
             String typeName = elem.getType();
             int arraySize = (int) elem.getArraySize();
 
-            // Check if type is a nested dataset reference (numeric ID)
+            // Resolve type: numeric ID (1..16 = primitive, >= 1000 = nested dataset) or type name
+            TrdpDataType dataType = null;
             try {
-                int nestedId = Integer.parseInt(typeName);
-                DataSetDefinition nested = datasetById.get(nestedId);
-                if (nested != null) {
-                    List<TrdpDataset.FieldDefinition> nestedSchema = buildSchema(nested, datasetById);
-                    for (int i = 0; i < arraySize; i++) {
-                        for (TrdpDataset.FieldDefinition nestedDef : nestedSchema) {
-                            String name = arraySize > 1
-                                    ? elem.getName() + "[" + i + "]." + nestedDef.getName()
-                                    : elem.getName() + "." + nestedDef.getName();
-                            schema.add(new TrdpDataset.FieldDefinition(name, nestedDef.getType()));
+                int numericId = Integer.parseInt(typeName);
+                // Try as primitive type ID first (1..16)
+                dataType = TrdpDataType.fromTypeId(numericId);
+                if (dataType == null) {
+                    // Must be a nested dataset reference (>= 1000)
+                    DataSetDefinition nested = datasetById.get(numericId);
+                    if (nested != null) {
+                        List<TrdpDataset.FieldDefinition> nestedSchema = buildSchema(nested, datasetById);
+                        for (int i = 0; i < arraySize; i++) {
+                            for (TrdpDataset.FieldDefinition nestedDef : nestedSchema) {
+                                String name = arraySize > 1
+                                        ? elem.getName() + "[" + i + "]." + nestedDef.getName()
+                                        : elem.getName() + "." + nestedDef.getName();
+                                schema.add(new TrdpDataset.FieldDefinition(name, nestedDef.getType()));
+                            }
                         }
+                        continue;
                     }
-                    continue;
+                    throw new IllegalArgumentException(
+                            "Unknown type ID " + numericId + " in dataset " + dsDef.getId());
                 }
             } catch (NumberFormatException e) {
-                // Not a numeric type, treat as TrdpDataType name
+                // Not numeric, resolve by type name (e.g. "UINT32", "BITSET8", "ANTIVALENT8")
+                dataType = TrdpDataType.fromName(typeName);
+                if (dataType == null) {
+                    throw new IllegalArgumentException(
+                            "Unknown type name '" + typeName + "' in dataset " + dsDef.getId());
+                }
             }
-
-            TrdpDataType dataType = TrdpDataType.valueOf(typeName);
             for (int i = 0; i < arraySize; i++) {
                 String fieldName = arraySize > 1
                         ? elem.getName() + "[" + i + "]"

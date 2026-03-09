@@ -15,11 +15,12 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - CRC32 checksums per IEEE 802.3
 
 - **TRDP Data Type System**
-  - Standard IEC 61375-2-3 data types (INT8, INT16, INT32, UINT8, UINT16, UINT32, REAL32, REAL64, etc.)
+  - All 16 IEC 61375-2-3 primitive data types with numeric type IDs (1..16)
+  - Type aliases: BITSET8 and ANTIVALENT8 resolve to BOOL8
   - Big Endian encoding (network byte order)
   - Dataset builder for structured data
   - Type-safe encoder/decoder utilities
-  - TIMEDATE timestamp support
+  - Lookup by numeric ID (`TrdpDataType.fromTypeId()`) or name (`TrdpDataType.fromName()`)
 
 - **Process Data (PD) Support**
   - Publisher/Subscriber pattern (Push)
@@ -48,11 +49,15 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Load device configuration from IEC 61375-2-3 XML files (`TrdpConfig.load()`)
   - XSD validation against `trdp-config.xsd` before parsing
   - Immutable POJO data model covering all standard elements (bus interfaces, telegrams, data sets, com parameters, services, mapped devices)
+  - `DatasetMarshaller` for automatic ComID-based encode/decode using dataset definitions
+  - Supports both numeric type IDs (`type="8"`) and type names (`type="UINT8"`) in dataset elements
+  - Nested dataset references and array elements
+  - `TrdpSessionFactory` wires XML telegram definitions into PD sessions
   - XXE attack prevention
   - Convenience lookups: `getDataSetById()`, `getComParameterById()`
 
 - **Production-Ready Features**
-  - Comprehensive unit and integration tests (300+ tests)
+  - Comprehensive unit and integration tests (270+ tests)
   - Thread-safe implementation
   - Proper resource management with AutoCloseable
   - SLF4J logging integration
@@ -460,24 +465,24 @@ String label = decoder.getString(16);
 
 ### Supported Data Types
 
-| Type | Java Type | Size | Description |
-|------|-----------|------|-------------|
-| BOOL8 | boolean | 1 byte | Boolean value |
-| CHAR8 | char | 1 byte | 8-bit character |
-| UTF16 | char | 2 bytes | Unicode character |
-| INT8 | byte | 1 byte | Signed 8-bit integer |
-| INT16 | short | 2 bytes | Signed 16-bit integer |
-| INT32 | int | 4 bytes | Signed 32-bit integer |
-| INT64 | long | 8 bytes | Signed 64-bit integer |
-| UINT8 | int | 1 byte | Unsigned 8-bit integer (0-255) |
-| UINT16 | int | 2 bytes | Unsigned 16-bit integer (0-65535) |
-| UINT32 | long | 4 bytes | Unsigned 32-bit integer |
-| UINT64 | long | 8 bytes | Unsigned 64-bit integer |
-| REAL32 | float | 4 bytes | IEEE 754 single-precision |
-| REAL64 | double | 8 bytes | IEEE 754 double-precision |
-| TIMEDATE32 | Instant | 4 bytes | Seconds since epoch |
-| TIMEDATE48 | Instant | 6 bytes | Seconds + microseconds |
-| TIMEDATE64 | Instant | 8 bytes | Seconds + microseconds |
+| Type | IEC ID | Java Type | Size | Description |
+|------|--------|-----------|------|-------------|
+| BOOL8 | 1 | boolean | 1 byte | Boolean value (aliases: BITSET8, ANTIVALENT8) |
+| CHAR8 | 2 | char | 1 byte | 8-bit character |
+| UTF16 | 3 | char | 2 bytes | Unicode character |
+| INT8 | 4 | byte | 1 byte | Signed 8-bit integer |
+| INT16 | 5 | short | 2 bytes | Signed 16-bit integer |
+| INT32 | 6 | int | 4 bytes | Signed 32-bit integer |
+| INT64 | 7 | long | 8 bytes | Signed 64-bit integer |
+| UINT8 | 8 | int | 1 byte | Unsigned 8-bit integer (0-255) |
+| UINT16 | 9 | int | 2 bytes | Unsigned 16-bit integer (0-65535) |
+| UINT32 | 10 | long | 4 bytes | Unsigned 32-bit integer |
+| UINT64 | 11 | long | 8 bytes | Unsigned 64-bit integer |
+| REAL32 | 12 | float | 4 bytes | IEEE 754 single-precision |
+| REAL64 | 13 | double | 8 bytes | IEEE 754 double-precision |
+| TIMEDATE32 | 14 | Instant | 4 bytes | Seconds since epoch |
+| TIMEDATE48 | 15 | Instant | 6 bytes | Seconds + microseconds |
+| TIMEDATE64 | 16 | Instant | 8 bytes | Seconds + microseconds |
 
 All multi-byte values are encoded in **Big Endian** (network byte order) format as per IEC 61375-2-3.
 

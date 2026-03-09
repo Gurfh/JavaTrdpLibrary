@@ -180,6 +180,7 @@ public class DatasetMarshaller {
         switch (def.getType()) {
             case BOOL8 -> dataset.addBool8(def.getName(), false);
             case CHAR8 -> dataset.addChar8(def.getName(), '\0');
+            case UTF16 -> dataset.addUtf16(def.getName(), '\0');
             case INT8 -> dataset.addInt8(def.getName(), (byte) 0);
             case INT16 -> dataset.addInt16(def.getName(), (short) 0);
             case INT32 -> dataset.addInt32(def.getName(), 0);
@@ -187,8 +188,11 @@ public class DatasetMarshaller {
             case UINT8 -> dataset.addUInt8(def.getName(), 0);
             case UINT16 -> dataset.addUInt16(def.getName(), 0);
             case UINT32 -> dataset.addUInt32(def.getName(), 0L);
+            case UINT64 -> dataset.addUInt64(def.getName(), 0L);
             case REAL32 -> dataset.addReal32(def.getName(), 0.0f);
             case REAL64 -> dataset.addReal64(def.getName(), 0.0);
+            case TIMEDATE32 -> dataset.addTimeDate32(def.getName(), Instant.EPOCH);
+            case TIMEDATE48 -> dataset.addTimeDate48(def.getName(), Instant.EPOCH);
             case TIMEDATE64 -> dataset.addTimeDate64(def.getName(), Instant.EPOCH);
             default -> throw new IllegalStateException("Unsupported type: " + def.getType());
         }
@@ -198,6 +202,7 @@ public class DatasetMarshaller {
         switch (def.getType()) {
             case BOOL8 -> dataset.addBool8(def.getName(), (Boolean) value);
             case CHAR8 -> dataset.addChar8(def.getName(), (Character) value);
+            case UTF16 -> dataset.addUtf16(def.getName(), (Character) value);
             case INT8 -> dataset.addInt8(def.getName(), ((Number) value).byteValue());
             case INT16 -> dataset.addInt16(def.getName(), ((Number) value).shortValue());
             case INT32 -> dataset.addInt32(def.getName(), ((Number) value).intValue());
@@ -205,8 +210,11 @@ public class DatasetMarshaller {
             case UINT8 -> dataset.addUInt8(def.getName(), ((Number) value).intValue());
             case UINT16 -> dataset.addUInt16(def.getName(), ((Number) value).intValue());
             case UINT32 -> dataset.addUInt32(def.getName(), ((Number) value).longValue());
+            case UINT64 -> dataset.addUInt64(def.getName(), ((Number) value).longValue());
             case REAL32 -> dataset.addReal32(def.getName(), ((Number) value).floatValue());
             case REAL64 -> dataset.addReal64(def.getName(), ((Number) value).doubleValue());
+            case TIMEDATE32 -> dataset.addTimeDate32(def.getName(), (Instant) value);
+            case TIMEDATE48 -> dataset.addTimeDate48(def.getName(), (Instant) value);
             case TIMEDATE64 -> dataset.addTimeDate64(def.getName(), (Instant) value);
             default -> throw new IllegalStateException("Unsupported type: " + def.getType());
         }

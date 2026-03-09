@@ -21,6 +21,11 @@ public class TrdpDataset {
         fields.add(new Field(name, TrdpDataType.CHAR8, value));
         return this;
     }
+
+    public TrdpDataset addUtf16(String name, char value) {
+        fields.add(new Field(name, TrdpDataType.UTF16, value));
+        return this;
+    }
     
     public TrdpDataset addInt8(String name, byte value) {
         fields.add(new Field(name, TrdpDataType.INT8, value));
@@ -56,6 +61,11 @@ public class TrdpDataset {
         fields.add(new Field(name, TrdpDataType.UINT32, value));
         return this;
     }
+
+    public TrdpDataset addUInt64(String name, long value) {
+        fields.add(new Field(name, TrdpDataType.UINT64, value));
+        return this;
+    }
     
     public TrdpDataset addReal32(String name, float value) {
         fields.add(new Field(name, TrdpDataType.REAL32, value));
@@ -67,6 +77,16 @@ public class TrdpDataset {
         return this;
     }
     
+    public TrdpDataset addTimeDate32(String name, Instant value) {
+        fields.add(new Field(name, TrdpDataType.TIMEDATE32, value));
+        return this;
+    }
+
+    public TrdpDataset addTimeDate48(String name, Instant value) {
+        fields.add(new Field(name, TrdpDataType.TIMEDATE48, value));
+        return this;
+    }
+
     public TrdpDataset addTimeDate64(String name, Instant value) {
         fields.add(new Field(name, TrdpDataType.TIMEDATE64, value));
         return this;
@@ -87,6 +107,9 @@ public class TrdpDataset {
                     break;
                 case CHAR8:
                     encoder.putChar8((Character) field.value);
+                    break;
+                case UTF16:
+                    encoder.putUtf16((Character) field.value);
                     break;
                 case INT8:
                     encoder.putInt8((Byte) field.value);
@@ -109,11 +132,20 @@ public class TrdpDataset {
                 case UINT32:
                     encoder.putUInt32((Long) field.value);
                     break;
+                case UINT64:
+                    encoder.putUInt64((Long) field.value);
+                    break;
                 case REAL32:
                     encoder.putReal32((Float) field.value);
                     break;
                 case REAL64:
                     encoder.putReal64((Double) field.value);
+                    break;
+                case TIMEDATE32:
+                    encoder.putTimeDate32((Instant) field.value);
+                    break;
+                case TIMEDATE48:
+                    encoder.putTimeDate48((Instant) field.value);
                     break;
                 case TIMEDATE64:
                     encoder.putTimeDate64((Instant) field.value);
@@ -138,6 +170,9 @@ public class TrdpDataset {
                 case CHAR8:
                     dataset.addChar8(def.name, decoder.getChar8());
                     break;
+                case UTF16:
+                    dataset.addUtf16(def.name, decoder.getUtf16());
+                    break;
                 case INT8:
                     dataset.addInt8(def.name, decoder.getInt8());
                     break;
@@ -159,11 +194,20 @@ public class TrdpDataset {
                 case UINT32:
                     dataset.addUInt32(def.name, decoder.getUInt32());
                     break;
+                case UINT64:
+                    dataset.addUInt64(def.name, decoder.getUInt64());
+                    break;
                 case REAL32:
                     dataset.addReal32(def.name, decoder.getReal32());
                     break;
                 case REAL64:
                     dataset.addReal64(def.name, decoder.getReal64());
+                    break;
+                case TIMEDATE32:
+                    dataset.addTimeDate32(def.name, decoder.getTimeDate32());
+                    break;
+                case TIMEDATE48:
+                    dataset.addTimeDate48(def.name, decoder.getTimeDate48());
                     break;
                 case TIMEDATE64:
                     dataset.addTimeDate64(def.name, decoder.getTimeDate64());
@@ -172,7 +216,7 @@ public class TrdpDataset {
                     throw new IllegalStateException("Unsupported type: " + def.type);
             }
         }
-        
+
         return dataset;
     }
     

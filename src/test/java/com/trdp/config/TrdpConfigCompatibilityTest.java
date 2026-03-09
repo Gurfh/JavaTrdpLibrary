@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import java.nio.file.Path;
+import java.io.InputStream;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -18,8 +18,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class TrdpConfigCompatibilityTest {
 
-    private static final Path XML_DIR = Path.of(
-            "/home/grabor/git/TCNOpen/3.0.0.0/test/xml");
+    private static final String XML_DIR = "/tcnopen-xml/";
+
+    private DeviceConfig load(String filename) throws TrdpConfigException {
+        InputStream is = getClass().getResourceAsStream(XML_DIR + filename);
+        assertThat(is).as("Test resource %s must exist", filename).isNotNull();
+        return TrdpConfig.load(is);
+    }
 
     // --- Loading XSD-valid config files ---
 
@@ -31,7 +36,7 @@ class TrdpConfigCompatibilityTest {
             "example.xml"
     })
     void loadsXsdValidFiles(String filename) throws TrdpConfigException {
-        DeviceConfig config = TrdpConfig.load(XML_DIR.resolve(filename));
+        DeviceConfig config = load(filename);
         assertThat(config.getHostName()).isNotNull();
         assertThat(config.getBusInterfaces()).isNotEmpty();
     }
@@ -47,7 +52,7 @@ class TrdpConfigCompatibilityTest {
             "test_sdt.xml"
     })
     void xsdInvalidFilesRejected(String filename) {
-        assertThatThrownBy(() -> TrdpConfig.load(XML_DIR.resolve(filename)))
+        assertThatThrownBy(() -> load(filename))
                 .isInstanceOf(TrdpConfigException.class)
                 .hasMessageContaining("XML validation failed");
     }
@@ -56,7 +61,7 @@ class TrdpConfigCompatibilityTest {
 
     @Test
     void completeExampleBitset8Antivalent8() throws TrdpConfigException {
-        DeviceConfig config = TrdpConfig.load(XML_DIR.resolve("complete_example.xml"));
+        DeviceConfig config = load("complete_example.xml");
         assertThat(config.getHostName()).isEqualTo("examplehost");
         assertThat(config.getBusInterfaces()).hasSize(2);
         assertThat(config.getDataSets()).hasSize(6);
@@ -77,7 +82,7 @@ class TrdpConfigCompatibilityTest {
 
     @Test
     void completeExampleAllStringTypes() throws TrdpConfigException {
-        DeviceConfig config = TrdpConfig.load(XML_DIR.resolve("complete_example.xml"));
+        DeviceConfig config = load("complete_example.xml");
         DatasetMarshaller marshaller = DatasetMarshaller.from(config);
 
         // Dataset 1004 has 15 types (no TIMEDATE48; BITSET8+ANTIVALENT8 resolve to BOOL8)
@@ -98,7 +103,7 @@ class TrdpConfigCompatibilityTest {
 
     @Test
     void completeExampleNestedDataset() throws TrdpConfigException {
-        DeviceConfig config = TrdpConfig.load(XML_DIR.resolve("complete_example.xml"));
+        DeviceConfig config = load("complete_example.xml");
         DatasetMarshaller marshaller = DatasetMarshaller.from(config);
 
         // ComID 1003 references dataset 1003 (source-sink on bus-interface 2)
@@ -110,7 +115,7 @@ class TrdpConfigCompatibilityTest {
 
     @Test
     void completeExampleMarshallRoundTrip() throws TrdpConfigException {
-        DeviceConfig config = TrdpConfig.load(XML_DIR.resolve("complete_example.xml"));
+        DeviceConfig config = load("complete_example.xml");
         DatasetMarshaller marshaller = DatasetMarshaller.from(config);
 
         // ComID 1001 -> dataset 1001: UINT8 u8_A, UINT8 u8_B, UINT16 u16, UINT32 u32, UINT64 u64
@@ -135,7 +140,7 @@ class TrdpConfigCompatibilityTest {
 
     @Test
     void device1NumericTypeIds() throws TrdpConfigException {
-        DeviceConfig config = TrdpConfig.load(XML_DIR.resolve("device1.xml"));
+        DeviceConfig config = load("device1.xml");
         assertThat(config.getHostName()).isEqualTo("device1");
 
         DatasetMarshaller marshaller = DatasetMarshaller.from(config);
@@ -155,7 +160,7 @@ class TrdpConfigCompatibilityTest {
 
     @Test
     void device1MarshallRoundTrip() throws TrdpConfigException {
-        DeviceConfig config = TrdpConfig.load(XML_DIR.resolve("device1.xml"));
+        DeviceConfig config = load("device1.xml");
         DatasetMarshaller marshaller = DatasetMarshaller.from(config);
 
         byte[] encoded = marshaller.marshall(1001, Map.of(
@@ -176,7 +181,7 @@ class TrdpConfigCompatibilityTest {
 
     @Test
     void device1SdtParameters() throws TrdpConfigException {
-        DeviceConfig config = TrdpConfig.load(XML_DIR.resolve("device1.xml"));
+        DeviceConfig config = load("device1.xml");
         BusInterface bi = config.getBusInterfaces().get(0);
         TelegramConfig telegram = bi.getTelegrams().get(0);
 
@@ -191,7 +196,7 @@ class TrdpConfigCompatibilityTest {
     @Test
     void device2LoadsAndType28FailsInMarshalling() throws TrdpConfigException {
         // device2.xml loads fine — XSD doesn't validate element type values
-        DeviceConfig config = TrdpConfig.load(XML_DIR.resolve("device2.xml"));
+        DeviceConfig config = load("device2.xml");
         assertThat(config.getHostName()).isEqualTo("device2");
 
         // ComID 1001 references dataset 1001 which only has valid types
@@ -209,7 +214,7 @@ class TrdpConfigCompatibilityTest {
 
     @Test
     void exampleWithSdt() throws TrdpConfigException {
-        DeviceConfig config = TrdpConfig.load(XML_DIR.resolve("example.xml"));
+        DeviceConfig config = load("example.xml");
         assertThat(config.getHostName()).isEqualTo("examplehost");
         assertThat(config.getBusInterfaces()).hasSize(2);
 

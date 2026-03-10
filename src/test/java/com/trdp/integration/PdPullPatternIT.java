@@ -1,118 +1,105 @@
 package com.trdp.integration;
 
-import com.trdp.pd.PdEvent;
-import com.trdp.pd.PdEventListener;
+import com.trdp.network.UdpTransport;
 import com.trdp.pd.PdPublisherHandle;
-import com.trdp.pd.PdRequester;
 import com.trdp.pd.TrdpPdSession;
+import com.trdp.protocol.TrdpConstants;
+import com.trdp.protocol.TrdpMessageType;
+import com.trdp.protocol.TrdpPacket;
+import com.trdp.protocol.TrdpPdHeader;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.AfterEach;
 import static org.assertj.core.api.Assertions.*;
 
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
+import java.net.InetAddress;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 class PdPullPatternIT {
 
     private TrdpPdSession pubSession;
-    private TrdpPdSession subSession;
-    private PdRequester requester;
+    private UdpTransport externalTransport;
 
     @AfterEach
     void tearDown() {
-        if (requester != null) requester.close();
-        if (subSession != null) subSession.close();
+        if (externalTransport != null) externalTransport.close();
         if (pubSession != null) pubSession.close();
     }
 
-    private static PdEventListener dataOnly(Consumer<PdEvent> callback) {
-        return new PdEventListener() {
-            @Override public void onData(PdEvent event) { callback.accept(event); }
-            @Override public void onTimeout(PdEvent event) {}
-            @Override public void onValidityRestored(PdEvent event) {}
-        };
-    }
-
     @Test
-    void testPullPatternMulticast() throws Exception {
+    void testPullPatternWithReplyAddress() throws Exception {
         int comId = 5000;
-        String multicastGroup = "239.255.0.5";
-        int sharedPort = 19600;
         int publisherListenPort = 19601;
-
         byte[] expectedData = "Pulled Data".getBytes();
 
-        // 1. Publisher session (listening for requests on publisherListenPort)
+        // Publisher session (listening for requests)
         pubSession = new TrdpPdSession(publisherListenPort);
         PdPublisherHandle pub = pubSession.addPublisher(comId, "127.0.0.1", 17224, 0);
         pub.putData(expectedData);
         pubSession.start();
 
-        // 2. Subscriber session (listening on multicast group)
-        CountDownLatch latch = new CountDownLatch(1);
-        AtomicReference<byte[]> receivedData = new AtomicReference<>();
-
-        subSession = new TrdpPdSession(sharedPort);
-        subSession.addSubscriber(comId, multicastGroup, 0, dataOnly(event -> {
-            receivedData.set(event.getData());
-            latch.countDown();
-        }));
-        subSession.start();
-
-        // 3. Requester sends request for reply to multicast group
-        requester = new PdRequester(sharedPort);
-
         Thread.sleep(100);
 
-        requester.request(comId, "127.0.0.1", publisherListenPort, 0, multicastGroup);
+        // Send PD_REQUEST with explicit replyIpAddress
+        externalTransport = new UdpTransport(0);
+        sendPdRequest(externalTransport, comId, publisherListenPort, 0, "127.0.0.1");
 
-        // 4. Verify reception
-        boolean received = latch.await(2, TimeUnit.SECONDS);
+        // Receive PD_REPLY routed to the specified reply address
+        byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
+        var received = externalTransport.receiveWithSource(buffer, 2000);
 
-        assertThat(received).as("Subscriber should receive the pulled data via multicast").isTrue();
-        assertThat(receivedData.get()).isEqualTo(expectedData);
+        assertThat(received).as("Should receive the pulled data via reply address").isNotNull();
+        TrdpPacket reply = TrdpPacket.decode(Arrays.copyOf(received.getData(), received.getLength()));
+        assertThat(reply.getHeader().getMessageType()).isEqualTo(TrdpMessageType.PD_REPLY);
+        assertThat(reply.getPayload()).isEqualTo(expectedData);
     }
 
     @Test
     void testPullPatternWithReplyComId() throws Exception {
         int requestComId = 5001;
         int replyComId = 5002;
-        String multicastGroup = "239.255.0.6";
-        int sharedPort = 19602;
         int publisherListenPort = 19603;
-
         byte[] expectedData = "Reply ComId Pull".getBytes();
 
-        // 1. Publisher session (listening for requests)
+        // Publisher session (listening for requests)
         pubSession = new TrdpPdSession(publisherListenPort);
         PdPublisherHandle pub = pubSession.addPublisher(requestComId, "127.0.0.1", 17224, 0);
         pub.putData(expectedData);
         pubSession.start();
 
-        // 2. Subscriber session (listening for reply ComId on multicast)
-        CountDownLatch latch = new CountDownLatch(1);
-        AtomicReference<byte[]> receivedData = new AtomicReference<>();
-
-        subSession = new TrdpPdSession(sharedPort);
-        subSession.addSubscriber(replyComId, multicastGroup, 0, dataOnly(event -> {
-            receivedData.set(event.getData());
-            latch.countDown();
-        }));
-        subSession.start();
-
-        // 3. Requester sends request with explicit replyComId
-        requester = new PdRequester(sharedPort);
-
         Thread.sleep(100);
 
-        requester.request(requestComId, "127.0.0.1", publisherListenPort, replyComId, multicastGroup);
+        // Send PD_REQUEST with explicit replyComId
+        externalTransport = new UdpTransport(0);
+        sendPdRequest(externalTransport, requestComId, publisherListenPort, replyComId, null);
 
-        // 4. Verify reception on replyComId
-        boolean received = latch.await(2, TimeUnit.SECONDS);
+        // Receive PD_REPLY with the specified reply ComId
+        byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
+        var received = externalTransport.receiveWithSource(buffer, 2000);
 
-        assertThat(received).as("Subscriber should receive the pulled data on reply ComId").isTrue();
-        assertThat(receivedData.get()).isEqualTo(expectedData);
+        assertThat(received).as("Should receive the pulled data with reply ComId").isNotNull();
+        TrdpPacket reply = TrdpPacket.decode(Arrays.copyOf(received.getData(), received.getLength()));
+        assertThat(reply.getHeader().getMessageType()).isEqualTo(TrdpMessageType.PD_REPLY);
+        assertThat(reply.getHeader().getComId()).isEqualTo(replyComId);
+        assertThat(reply.getPayload()).isEqualTo(expectedData);
+    }
+
+    private void sendPdRequest(UdpTransport transport, int comId, int destPort,
+                                int replyComId, String replyIpAddress) throws Exception {
+        TrdpPdHeader header = new TrdpPdHeader();
+        header.setSequenceCounter(0);
+        header.setMessageType(TrdpMessageType.PD_REQUEST);
+        header.setComId(comId);
+        header.setDatasetLength(0);
+        if (replyComId != 0) {
+            header.setReplyComId(replyComId);
+        }
+        if (replyIpAddress != null) {
+            InetAddress inet = InetAddress.getByName(replyIpAddress);
+            header.setReplyIpAddress(ByteBuffer.wrap(inet.getAddress()).getInt());
+        }
+
+        TrdpPacket packet = new TrdpPacket(header, new byte[0]);
+        transport.send(packet.encode(), InetAddress.getByName("127.0.0.1"), destPort);
     }
 }

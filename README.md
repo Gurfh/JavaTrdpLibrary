@@ -61,7 +61,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Convenience lookups: `getDataSetById()`, `getComParameterById()`
 
 - **Production-Ready Features**
-  - Comprehensive unit and integration tests (290+ tests)
+  - Comprehensive unit and integration tests (350+ tests)
   - Thread-safe implementation
   - Proper resource management with AutoCloseable
   - SLF4J logging integration
@@ -70,9 +70,9 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
 
 ## Requirements
 
-- Java 17 or later
+- Java 21 or later
 - Maven 3.8+
-- JVM flag `--add-opens java.base/sun.nio.ch=ALL-UNNAMED` for unicast TTL control (included in `.mvn/jvm.config` for Maven builds; add to your deployment JVM args)
+- JVM flag `--add-opens java.base/sun.nio.ch=ALL-UNNAMED` for native file descriptor extraction used by unicast TTL (included in `.mvn/jvm.config` for Maven builds; add to your deployment JVM args)
 
 ## Installation
  
@@ -394,7 +394,8 @@ try (ConfiguredMdSession session = TrdpSessionFactory.configureMd(config, bi, re
 
 All session and transport constructors accept optional bind address, TTL, and QoS.
 
-> **Note:** Unicast TTL requires the JVM flag `--add-opens java.base/sun.nio.ch=ALL-UNNAMED`.
+> **Note:** Unicast TTL uses JNA `setsockopt()` via `NativeSocketOptions`, which requires the JVM flag
+> `--add-opens java.base/sun.nio.ch=ALL-UNNAMED` for native fd extraction.
 > This is provided automatically for Maven builds via `.mvn/jvm.config`.
 > Without it, unicast packets use the OS default TTL (64 on Linux, 128 on Windows).
 > Multicast TTL (`IP_MULTICAST_TTL`) always works without extra flags.
@@ -664,8 +665,9 @@ com.trdp
 │   ├── TrdpDataset     # Dataset builder/parser
 │   └── TrdpTopologyUtils # Shared topology validation
 └── network          # Network layer
-    ├── UdpTransport    # UDP transport implementation
-    └── TcpTransport    # TCP transport implementation
+    ├── UdpTransport          # UDP transport implementation
+    ├── NativeSocketOptions   # JNA setsockopt/getsockopt for unicast TTL
+    └── TcpTransport          # TCP transport implementation
 ```
 
 ## Building from Source

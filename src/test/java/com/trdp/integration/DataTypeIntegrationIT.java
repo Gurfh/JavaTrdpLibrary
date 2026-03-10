@@ -40,7 +40,6 @@ class DataTypeIntegrationIT {
     @Test
     void testPublishSubscribeWithStructuredData() throws Exception {
         int comId = 3000;
-        String multicastGroup = "239.255.0.1";
         int port = 19200;
 
         TrdpDataset trainData = new TrdpDataset()
@@ -70,7 +69,7 @@ class DataTypeIntegrationIT {
         );
 
         subSession = new TrdpPdSession(port);
-        subSession.addSubscriber(comId, multicastGroup, 0, dataOnly(event -> {
+        subSession.addSubscriber(comId, null, 0, dataOnly(event -> {
             receivedData.set(event.getData());
             latch.countDown();
         }));
@@ -79,7 +78,7 @@ class DataTypeIntegrationIT {
         Thread.sleep(500);
 
         pubSession = new TrdpPdSession(0);
-        PdPublisherHandle pub = pubSession.addPublisher(comId, multicastGroup, port, 0);
+        PdPublisherHandle pub = pubSession.addPublisher(comId, "127.0.0.1", port, 0);
         pub.putDataImmediate(encodedData);
 
         boolean received = latch.await(3, TimeUnit.SECONDS);

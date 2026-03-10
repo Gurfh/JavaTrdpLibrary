@@ -3,14 +3,21 @@ package com.trdp.network;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.FileDescriptor;
 import java.io.IOException;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.net.*;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.MembershipKey;
 
+/**
+ * {@link DatagramChannel}-based UDP transport with multicast group management
+ * and configurable socket options (bind address, TTL, QoS).
+ * <p>
+ * Sets both multicast TTL ({@link StandardSocketOptions#IP_MULTICAST_TTL}) and
+ * unicast TTL ({@code IP_TTL} via JNA {@code setsockopt} through
+ * {@link NativeSocketOptions}). Unicast TTL requires JVM flag
+ * {@code --add-opens java.base/sun.nio.ch=ALL-UNNAMED} for native fd extraction;
+ * without it, unicast packets use the OS default TTL.
+ */
 public class UdpTransport implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(UdpTransport.class);
 
@@ -41,10 +48,13 @@ public class UdpTransport implements AutoCloseable {
 
     /**
      * Creates a UDP transport with custom socket options.
+     * <p>
+     * Sets both {@code IP_MULTICAST_TTL} (via {@link StandardSocketOptions}) and
+     * unicast {@code IP_TTL} (via JNA {@code setsockopt} through {@link NativeSocketOptions}).
      *
      * @param port         the UDP port to bind to (0 for ephemeral)
      * @param bindAddress  the local address to bind to, or {@code null} for wildcard
-     * @param ttl          the IP time-to-live for outgoing packets
+     * @param ttl          the IP time-to-live for both multicast and unicast outgoing packets
      * @param trafficClass the IP traffic class byte (use {@link #qosToTrafficClass(int)} to convert from QoS)
      * @throws IOException if socket creation fails
      */
@@ -154,40 +164,18 @@ public class UdpTransport implements AutoCloseable {
         return socket.getTrafficClass();
     }
 
-    /**
-     * Sets the unicast IP_TTL socket option via {@code setsockopt(IPPROTO_IP, IP_TTL)}.
-     * <p>
-     * Java provides no public API for unicast TTL — {@code IP_MULTICAST_TTL} only
-     * affects multicast packets. This method accesses the channel's native file
-     * descriptor via reflection and calls {@code sun.nio.ch.Net.setIntOption0()}.
-     * <p>
-     * Requires JVM flag: {@code --add-opens java.base/sun.nio.ch=ALL-UNNAMED}
-     */
     private void setUnicastTtl(int ttl) {
-        try {
-            // Get the native FileDescriptor from the DatagramChannelImpl
-            Field fdField = channel.getClass().getDeclaredField("fd");
-            fdField.setAccessible(true);
-            FileDescriptor fd = (FileDescriptor) fdField.get(channel);
+        NativeSocketOptions.setUnicastTtl(channel, ttl);
+    }
 
-            Class<?> netClass = Class.forName("sun.nio.ch.Net");
-            Method setIntOption0 = netClass.getDeclaredMethod("setIntOption0",
-                    FileDescriptor.class, boolean.class, int.class, int.class,
-                    int.class, boolean.class);
-            setIntOption0.setAccessible(true);
-
-            // IPPROTO_IP = 0 on all platforms
-            // IP_TTL: Windows = 4, Linux/macOS = 2
-            int ipTtlOpt = System.getProperty("os.name", "").toLowerCase()
-                    .contains("win") ? 4 : 2;
-            setIntOption0.invoke(null, fd, false, 0, ipTtlOpt, ttl, false);
-            logger.debug("Unicast IP_TTL set to {}", ttl);
-        } catch (Exception e) {
-            logger.debug("Could not set unicast IP_TTL: {}. "
-                    + "Unicast packets will use the OS default TTL. "
-                    + "Add JVM flag: --add-opens java.base/sun.nio.ch=ALL-UNNAMED",
-                    e.getMessage());
-        }
+    /**
+     * Returns the unicast {@code IP_TTL} value configured on this channel via
+     * JNA {@code getsockopt(IPPROTO_IP, IP_TTL)}.
+     *
+     * @return the current unicast TTL value, or {@code -1} if unavailable
+     */
+    public int getUnicastTtl() {
+        return NativeSocketOptions.getUnicastTtl(channel);
     }
 
     @Override

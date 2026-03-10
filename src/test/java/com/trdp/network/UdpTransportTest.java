@@ -75,6 +75,12 @@ class UdpTransportTest {
     }
 
     @Test
+    void testUnicastTtlIsSet() throws IOException {
+        transport = new UdpTransport(0, null, 42, 0);
+        assertThat(transport.getUnicastTtl()).isEqualTo(42);
+    }
+
+    @Test
     void testReceiveTimeout() throws IOException {
         transport = new UdpTransport(18002);
         

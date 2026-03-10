@@ -3,7 +3,10 @@ package com.trdp.network;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.FileDescriptor;
 import java.io.IOException;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.net.*;
 
 public class UdpTransport implements AutoCloseable {
@@ -51,6 +54,7 @@ public class UdpTransport implements AutoCloseable {
         }
         this.socket.setReuseAddress(true);
         this.socket.setTimeToLive(ttl);
+        setUnicastTtl(ttl);
         if (trafficClass != 0) {
             this.socket.setTrafficClass(trafficClass);
         }
@@ -142,6 +146,87 @@ public class UdpTransport implements AutoCloseable {
         return socket.getTrafficClass();
     }
     
+    /**
+     * Sets the unicast IP_TTL socket option via JDK internals.
+     * {@link MulticastSocket#setTimeToLive(int)} only sets {@code IP_MULTICAST_TTL},
+     * which has no effect on unicast packets — the OS default TTL is used instead
+     * (128 on Windows, 64 on Linux). This method uses reflection to call
+     * {@code setsockopt(IPPROTO_IP, IP_TTL)} for unicast TTL control.
+     * <p>
+     * Requires JVM flags: {@code --add-opens java.base/java.net=ALL-UNNAMED
+     * --add-opens java.base/sun.nio.ch=ALL-UNNAMED}
+     */
+    private void setUnicastTtl(int ttl) {
+        try {
+            FileDescriptor fd = getSocketFd();
+
+            Class<?> netClass = Class.forName("sun.nio.ch.Net");
+            Method setIntOption0 = netClass.getDeclaredMethod("setIntOption0",
+                    FileDescriptor.class, boolean.class, int.class, int.class,
+                    int.class, boolean.class);
+            setIntOption0.setAccessible(true);
+
+            // IPPROTO_IP = 0 on all platforms
+            // IP_TTL: Windows = 4, Linux/macOS = 2
+            int ipTtlOpt = System.getProperty("os.name", "").toLowerCase()
+                    .contains("win") ? 4 : 2;
+            setIntOption0.invoke(null, fd, false, 0, ipTtlOpt, ttl, false);
+            logger.debug("Unicast IP_TTL set to {}", ttl);
+        } catch (Exception e) {
+            logger.debug("Could not set unicast IP_TTL: {}. "
+                    + "Unicast packets will use the OS default TTL. "
+                    + "Add JVM flags: --add-opens java.base/java.net=ALL-UNNAMED "
+                    + "--add-opens java.base/sun.nio.ch=ALL-UNNAMED",
+                    e.getMessage());
+        }
+    }
+
+    /**
+     * Extracts the native {@link FileDescriptor} from the socket, handling both
+     * JDK 17 ({@code DatagramSocket.impl → DatagramSocketImpl.fd}) and
+     * JDK 21+ ({@code DatagramSocket.delegate → DatagramSocketAdaptor.dc → fd})
+     * internal layouts.
+     */
+    private FileDescriptor getSocketFd() throws ReflectiveOperationException {
+        // JDK 21+: DatagramSocket.delegate → DatagramSocketAdaptor.dc → fd
+        try {
+            Field delegateField = DatagramSocket.class.getDeclaredField("delegate");
+            delegateField.setAccessible(true);
+            Object delegate = delegateField.get(socket);
+
+            Field dcField = delegate.getClass().getDeclaredField("dc");
+            dcField.setAccessible(true);
+            Object dc = dcField.get(delegate);
+
+            return findFd(dc);
+        } catch (NoSuchFieldException ignored) {
+            // fall through to JDK 17 path
+        }
+
+        // JDK 17: DatagramSocket.impl → DatagramSocketImpl.fd
+        Field implField = DatagramSocket.class.getDeclaredField("impl");
+        implField.setAccessible(true);
+        Object impl = implField.get(socket);
+        return findFd(impl);
+    }
+
+    private static FileDescriptor findFd(Object obj) throws ReflectiveOperationException {
+        Class<?> c = obj.getClass();
+        while (c != null && c != Object.class) {
+            try {
+                Field fdField = c.getDeclaredField("fd");
+                if (fdField.getType() == FileDescriptor.class) {
+                    fdField.setAccessible(true);
+                    return (FileDescriptor) fdField.get(obj);
+                }
+            } catch (NoSuchFieldException ignored) {
+                // continue up the hierarchy
+            }
+            c = c.getSuperclass();
+        }
+        throw new NoSuchFieldException("fd not found in " + obj.getClass().getName());
+    }
+
     @Override
     public void close() {
         if (socket != null && !socket.isClosed()) {

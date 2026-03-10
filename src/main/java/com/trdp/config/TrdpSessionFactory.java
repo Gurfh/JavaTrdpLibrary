@@ -1,7 +1,6 @@
 package com.trdp.config;
 
 import com.trdp.md.MdReplier;
-import com.trdp.md.MdRequest;
 import com.trdp.md.MdRequestHandler;
 import com.trdp.md.MdRequester;
 import com.trdp.md.MdReply;
@@ -298,8 +297,6 @@ public class TrdpSessionFactory {
             // Phase 4: apply per-telegram ComParameter overrides
             Long comParamId = telegram.getComParameterId();
             if (comParamId != null && comParamId > 0) {
-                final long prt = perReplyTimeout;
-                final TransportProtocol pp = perProtocol;
                 config.getComParameterById(comParamId).ifPresent(cp -> {
                     if (cp.getQos() != qos || cp.getTtl() != ttl) {
                         logger.warn("MD telegram ComID {} has com-parameter-id {} with "

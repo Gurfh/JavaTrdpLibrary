@@ -72,6 +72,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
 
 - Java 17 or later
 - Maven 3.8+
+- JVM flag `--add-opens java.base/sun.nio.ch=ALL-UNNAMED` for unicast TTL control (included in `.mvn/jvm.config` for Maven builds; add to your deployment JVM args)
 
 ## Installation
  
@@ -391,7 +392,12 @@ try (ConfiguredMdSession session = TrdpSessionFactory.configureMd(config, bi, re
 
 #### Custom Socket Options
 
-All session and transport constructors accept optional bind address, TTL, and QoS:
+All session and transport constructors accept optional bind address, TTL, and QoS.
+
+> **Note:** Unicast TTL requires the JVM flag `--add-opens java.base/sun.nio.ch=ALL-UNNAMED`.
+> This is provided automatically for Maven builds via `.mvn/jvm.config`.
+> Without it, unicast packets use the OS default TTL (64 on Linux, 128 on Windows).
+> Multicast TTL (`IP_MULTICAST_TTL`) always works without extra flags.
 
 ```java
 import java.net.InetAddress;

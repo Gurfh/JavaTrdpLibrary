@@ -24,6 +24,7 @@
         <logback.version>1.5.29</logback.version>
         <assertj.version>3.27.7</assertj.version>
         <jackson.version>2.18.6</jackson.version>
+        <trdp.jvm.opens>--add-opens java.base/sun.nio.ch=ALL-UNNAMED</trdp.jvm.opens>
     </properties>
 
     <dependencies>
@@ -110,12 +111,18 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.3</version>
+                <configuration>
+                    <argLine>${trdp.jvm.opens}</argLine>
+                </configuration>
             </plugin>
 
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <version>3.2.3</version>
+                <configuration>
+                    <argLine>${trdp.jvm.opens}</argLine>
+                </configuration>
                 <executions>
                     <execution>
                         <goals>

@@ -8,11 +8,14 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.*;
+import java.nio.channels.DatagramChannel;
+import java.nio.channels.MembershipKey;
 
 public class UdpTransport implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(UdpTransport.class);
 
-    private final MulticastSocket socket;
+    private final DatagramChannel channel;
+    private final DatagramSocket socket;
     private final int port;
 
     /**
@@ -47,27 +50,32 @@ public class UdpTransport implements AutoCloseable {
      */
     public UdpTransport(int port, InetAddress bindAddress, int ttl, int trafficClass) throws IOException {
         this.port = port;
-        if (bindAddress != null) {
-            this.socket = new MulticastSocket(new InetSocketAddress(bindAddress, port));
-        } else {
-            this.socket = new MulticastSocket(port);
-        }
+        this.channel = DatagramChannel.open(StandardProtocolFamily.INET);
+        this.socket = channel.socket();
         this.socket.setReuseAddress(true);
-        this.socket.setTimeToLive(ttl);
+
+        if (bindAddress != null) {
+            channel.bind(new InetSocketAddress(bindAddress, port));
+        } else {
+            channel.bind(new InetSocketAddress(port));
+        }
+
+        channel.setOption(StandardSocketOptions.IP_MULTICAST_TTL, ttl);
         setUnicastTtl(ttl);
         if (trafficClass != 0) {
             this.socket.setTrafficClass(trafficClass);
         }
 
+        int boundPort = socket.getLocalPort();
         if (port > 0) {
             logger.debug("UDP Transport created on port {} (ttl={}, tc=0x{}))",
                     port, ttl, Integer.toHexString(trafficClass));
         } else {
             logger.debug("UDP Transport created on ephemeral port {} (ttl={}, tc=0x{})",
-                    socket.getLocalPort(), ttl, Integer.toHexString(trafficClass));
+                    boundPort, ttl, Integer.toHexString(trafficClass));
         }
     }
-    
+
     public void joinMulticastGroup(InetAddress group) throws IOException {
         NetworkInterface networkInterface = NetworkInterface.getByInetAddress(
             InetAddress.getLocalHost());
@@ -81,60 +89,60 @@ public class UdpTransport implements AutoCloseable {
     }
 
     public void joinMulticastGroup(InetAddress group, NetworkInterface networkInterface) throws IOException {
-        socket.joinGroup(new InetSocketAddress(group, port), networkInterface);
+        MembershipKey key = channel.join(group, networkInterface);
         logger.debug("Joined multicast group {} on port {} via {}", group.getHostAddress(), port, networkInterface.getName());
     }
-    
+
     public void send(byte[] data, InetAddress address, int port) throws IOException {
         DatagramPacket packet = new DatagramPacket(data, data.length, address, port);
         socket.send(packet);
         logger.trace("Sent {} bytes to {}:{}", data.length, address.getHostAddress(), port);
     }
-    
+
     public int receive(byte[] buffer, int timeoutMs) throws IOException {
         socket.setSoTimeout(timeoutMs);
         DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-        
+
         try {
             socket.receive(packet);
-            logger.trace("Received {} bytes from {}:{}", 
-                       packet.getLength(), 
-                       packet.getAddress().getHostAddress(), 
+            logger.trace("Received {} bytes from {}:{}",
+                       packet.getLength(),
+                       packet.getAddress().getHostAddress(),
                        packet.getPort());
             return packet.getLength();
         } catch (SocketTimeoutException e) {
             return 0;
         }
     }
-    
+
     public ReceivedPacket receiveWithSource(byte[] buffer, int timeoutMs) throws IOException {
         socket.setSoTimeout(timeoutMs);
         DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-        
+
         try {
             socket.receive(packet);
-            logger.trace("Received {} bytes from {}:{}", 
-                       packet.getLength(), 
-                       packet.getAddress().getHostAddress(), 
+            logger.trace("Received {} bytes from {}:{}",
+                       packet.getLength(),
+                       packet.getAddress().getHostAddress(),
                        packet.getPort());
-            return new ReceivedPacket(buffer, packet.getLength(), 
+            return new ReceivedPacket(buffer, packet.getLength(),
                                     packet.getAddress(), packet.getPort());
         } catch (SocketTimeoutException e) {
             return null;
         }
     }
-    
+
     public int getLocalPort() {
         return socket.getLocalPort();
     }
 
     /**
-     * Returns the IP time-to-live value configured on this socket.
+     * Returns the IP multicast time-to-live value configured on this channel.
      *
      * @throws IOException if the socket option cannot be read
      */
     public int getTimeToLive() throws IOException {
-        return socket.getTimeToLive();
+        return channel.getOption(StandardSocketOptions.IP_MULTICAST_TTL);
     }
 
     /**
@@ -145,20 +153,22 @@ public class UdpTransport implements AutoCloseable {
     public int getTrafficClass() throws java.net.SocketException {
         return socket.getTrafficClass();
     }
-    
+
     /**
-     * Sets the unicast IP_TTL socket option via JDK internals.
-     * {@link MulticastSocket#setTimeToLive(int)} only sets {@code IP_MULTICAST_TTL},
-     * which has no effect on unicast packets — the OS default TTL is used instead
-     * (128 on Windows, 64 on Linux). This method uses reflection to call
-     * {@code setsockopt(IPPROTO_IP, IP_TTL)} for unicast TTL control.
+     * Sets the unicast IP_TTL socket option via {@code setsockopt(IPPROTO_IP, IP_TTL)}.
      * <p>
-     * Requires JVM flags: {@code --add-opens java.base/java.net=ALL-UNNAMED
-     * --add-opens java.base/sun.nio.ch=ALL-UNNAMED}
+     * Java provides no public API for unicast TTL — {@code IP_MULTICAST_TTL} only
+     * affects multicast packets. This method accesses the channel's native file
+     * descriptor via reflection and calls {@code sun.nio.ch.Net.setIntOption0()}.
+     * <p>
+     * Requires JVM flag: {@code --add-opens java.base/sun.nio.ch=ALL-UNNAMED}
      */
     private void setUnicastTtl(int ttl) {
         try {
-            FileDescriptor fd = getSocketFd();
+            // Get the native FileDescriptor from the DatagramChannelImpl
+            Field fdField = channel.getClass().getDeclaredField("fd");
+            fdField.setAccessible(true);
+            FileDescriptor fd = (FileDescriptor) fdField.get(channel);
 
             Class<?> netClass = Class.forName("sun.nio.ch.Net");
             Method setIntOption0 = netClass.getDeclaredMethod("setIntOption0",
@@ -175,63 +185,20 @@ public class UdpTransport implements AutoCloseable {
         } catch (Exception e) {
             logger.debug("Could not set unicast IP_TTL: {}. "
                     + "Unicast packets will use the OS default TTL. "
-                    + "Add JVM flags: --add-opens java.base/java.net=ALL-UNNAMED "
-                    + "--add-opens java.base/sun.nio.ch=ALL-UNNAMED",
+                    + "Add JVM flag: --add-opens java.base/sun.nio.ch=ALL-UNNAMED",
                     e.getMessage());
         }
     }
 
-    /**
-     * Extracts the native {@link FileDescriptor} from the socket, handling both
-     * JDK 17 ({@code DatagramSocket.impl → DatagramSocketImpl.fd}) and
-     * JDK 21+ ({@code DatagramSocket.delegate → DatagramSocketAdaptor.dc → fd})
-     * internal layouts.
-     */
-    private FileDescriptor getSocketFd() throws ReflectiveOperationException {
-        // JDK 21+: DatagramSocket.delegate → DatagramSocketAdaptor.dc → fd
-        try {
-            Field delegateField = DatagramSocket.class.getDeclaredField("delegate");
-            delegateField.setAccessible(true);
-            Object delegate = delegateField.get(socket);
-
-            Field dcField = delegate.getClass().getDeclaredField("dc");
-            dcField.setAccessible(true);
-            Object dc = dcField.get(delegate);
-
-            return findFd(dc);
-        } catch (NoSuchFieldException ignored) {
-            // fall through to JDK 17 path
-        }
-
-        // JDK 17: DatagramSocket.impl → DatagramSocketImpl.fd
-        Field implField = DatagramSocket.class.getDeclaredField("impl");
-        implField.setAccessible(true);
-        Object impl = implField.get(socket);
-        return findFd(impl);
-    }
-
-    private static FileDescriptor findFd(Object obj) throws ReflectiveOperationException {
-        Class<?> c = obj.getClass();
-        while (c != null && c != Object.class) {
-            try {
-                Field fdField = c.getDeclaredField("fd");
-                if (fdField.getType() == FileDescriptor.class) {
-                    fdField.setAccessible(true);
-                    return (FileDescriptor) fdField.get(obj);
-                }
-            } catch (NoSuchFieldException ignored) {
-                // continue up the hierarchy
-            }
-            c = c.getSuperclass();
-        }
-        throw new NoSuchFieldException("fd not found in " + obj.getClass().getName());
-    }
-
     @Override
     public void close() {
-        if (socket != null && !socket.isClosed()) {
-            socket.close();
-            logger.debug("UDP Transport closed");
+        try {
+            if (channel != null && channel.isOpen()) {
+                channel.close();
+                logger.debug("UDP Transport closed");
+            }
+        } catch (IOException e) {
+            logger.debug("Error closing UDP Transport: {}", e.getMessage());
         }
     }
 }

@@ -26,6 +26,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Publisher/Subscriber pattern (Push)
   - Requester/Replier pattern (Pull)
   - High-performance session manager (`TrdpPdSession`) with shared socket and thread pool
+  - Dynamic add/remove of publishers and subscribers on a running session
   - Traffic shaping: staggered initial delays prevent network bursts when many publishers share the same interval
   - Cyclic auto-retransmission with configurable interval
   - Immediate send for non-cyclic publishers via `putDataImmediate()`
@@ -61,7 +62,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
   - Convenience lookups: `getDataSetById()`, `getComParameterById()`
 
 - **Production-Ready Features**
-  - Comprehensive unit and integration tests (350+ tests)
+  - Comprehensive unit and integration tests (370+ tests)
   - Thread-safe implementation
   - Proper resource management with AutoCloseable
   - SLF4J logging integration
@@ -114,7 +115,7 @@ import com.trdp.pd.PdEventListener;
 
 // Create a session on the standard PD port
 try (TrdpPdSession session = new TrdpPdSession(17224)) {
-    // Register publishers and subscribers before starting
+    // Register publishers and subscribers (before or after start)
     PdPublisherHandle pub = session.addPublisher(
         1000,            // ComID
         "239.255.0.1",   // Destination address
@@ -152,11 +153,19 @@ try (TrdpPdSession session = new TrdpPdSession(17224)) {
     // Disable if you need all publishers to fire simultaneously:
     // session.setTrafficShapingEnabled(false);
 
-    // Start the session (no more registrations allowed after this)
+    // Start the session
     session.start();
 
     // Stage data for cyclic transmission
     pub.putData("Cyclic payload".getBytes());
+
+    // Dynamic add/remove on a running session
+    PdPublisherHandle pub2 = session.addPublisher(1001, "239.255.0.1", 17224, 50_000);
+    pub2.putData("Dynamic payload".getBytes());
+    session.removePublisher(1001);  // stops cyclic sends for this ComID
+
+    PdSubscriberHandle sub2 = session.addSubscriber(2001, "239.255.0.1", 100_000, listener);
+    session.removeSubscribers(2001);  // removes all subscribers for this ComID
 
     // Query subscriber state
     if (sub.isTimedOut()) {

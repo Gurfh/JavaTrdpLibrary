@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
@@ -75,21 +76,23 @@ class TrdpPdSessionTest {
     }
 
     @Test
-    void testAddPublisherAfterStartThrows() throws Exception {
+    void testAddPublisherAfterStartSucceeds() throws Exception {
         session = new TrdpPdSession(19103);
         session.start();
 
-        assertThatThrownBy(() -> session.addPublisher(1000, "127.0.0.1", 17224, 0))
-                .isInstanceOf(IllegalStateException.class);
+        PdPublisherHandle handle = session.addPublisher(1000, "127.0.0.1", 17224, 0);
+        assertThat(handle.getComId()).isEqualTo(1000);
+        assertThat(session.getPublisherCount()).isEqualTo(1);
     }
 
     @Test
-    void testAddSubscriberAfterStartThrows() throws Exception {
+    void testAddSubscriberAfterStartSucceeds() throws Exception {
         session = new TrdpPdSession(19104);
         session.start();
 
-        assertThatThrownBy(() -> session.addSubscriber(2000, null, 0, new NoOpPdEventListener()))
-                .isInstanceOf(IllegalStateException.class);
+        PdSubscriberHandle handle = session.addSubscriber(2000, null, 100_000, new NoOpPdEventListener());
+        assertThat(handle.getComId()).isEqualTo(2000);
+        assertThat(session.getSubscriberCount()).isEqualTo(1);
     }
 
     @Test
@@ -467,6 +470,265 @@ class TrdpPdSessionTest {
         } finally {
             sender.close();
         }
+    }
+
+    // --- Dynamic add/remove tests ---
+
+    @Test
+    void testAddCyclicPublisherAfterStartSendsData() throws Exception {
+        UdpTransport receiver = new UdpTransport(19200);
+        try {
+            session = new TrdpPdSession(0);
+            session.start();
+
+            PdPublisherHandle pub = session.addPublisher(1000, "127.0.0.1", 19200, 50_000);
+            pub.putData("dynamic".getBytes());
+
+            byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
+            int len = receiver.receive(buffer, 2000);
+            assertThat(len).isGreaterThan(0);
+
+            TrdpPacket packet = TrdpPacket.decode(java.util.Arrays.copyOf(buffer, len));
+            assertThat(packet.getPayload()).isEqualTo("dynamic".getBytes());
+        } finally {
+            receiver.close();
+        }
+    }
+
+    @Test
+    void testAddNonCyclicPublisherAfterStartSupportsImmediate() throws Exception {
+        UdpTransport receiver = new UdpTransport(19201);
+        try {
+            session = new TrdpPdSession(0);
+            session.start();
+
+            PdPublisherHandle pub = session.addPublisher(1000, "127.0.0.1", 19201, 0);
+            pub.putDataImmediate("immediate".getBytes());
+
+            byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
+            int len = receiver.receive(buffer, 2000);
+            assertThat(len).isGreaterThan(0);
+
+            TrdpPacket packet = TrdpPacket.decode(java.util.Arrays.copyOf(buffer, len));
+            assertThat(packet.getPayload()).isEqualTo("immediate".getBytes());
+        } finally {
+            receiver.close();
+        }
+    }
+
+    @Test
+    void testAddSubscriberAfterStartReceivesData() throws Exception {
+        int port = 19202;
+        int comId = 5000;
+
+        session = new TrdpPdSession(port);
+        session.start();
+
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<byte[]> receivedData = new AtomicReference<>();
+        session.addSubscriber(comId, null, 0, new PdEventListener() {
+            @Override public void onData(PdEvent event) {
+                receivedData.set(event.getData());
+                latch.countDown();
+            }
+            @Override public void onTimeout(PdEvent event) {}
+            @Override public void onValidityRestored(PdEvent event) {}
+        });
+
+        Thread.sleep(100);
+
+        UdpTransport sender = new UdpTransport(0);
+        try {
+            TrdpPdHeader header = new TrdpPdHeader();
+            header.setSequenceCounter(0);
+            header.setMessageType(TrdpMessageType.PD);
+            header.setComId(comId);
+            header.setDatasetLength(4);
+            TrdpPacket packet = new TrdpPacket(header, new byte[]{1, 2, 3, 4});
+            sender.send(packet.encode(), InetAddress.getByName("127.0.0.1"), port);
+
+            assertThat(latch.await(3, TimeUnit.SECONDS)).isTrue();
+            assertThat(receivedData.get()).isEqualTo(new byte[]{1, 2, 3, 4});
+        } finally {
+            sender.close();
+        }
+    }
+
+    @Test
+    void testAddSubscriberAfterStartTimeoutWorks() throws Exception {
+        int port = 19203;
+        int comId = 5001;
+
+        session = new TrdpPdSession(port);
+        session.start();
+
+        CountDownLatch timeoutLatch = new CountDownLatch(1);
+        PdSubscriberHandle handle = session.addSubscriber(comId, null, 50_000, new PdEventListener() {
+            @Override public void onData(PdEvent event) {}
+            @Override public void onTimeout(PdEvent event) { timeoutLatch.countDown(); }
+            @Override public void onValidityRestored(PdEvent event) {}
+        });
+
+        assertThat(timeoutLatch.await(2, TimeUnit.SECONDS)).isTrue();
+        assertThat(handle.isTimedOut()).isTrue();
+    }
+
+    @Test
+    void testRemovePublisher() throws Exception {
+        session = new TrdpPdSession(19204);
+        session.addPublisher(1000, "127.0.0.1", 17224, 0);
+        assertThat(session.getPublisherCount()).isEqualTo(1);
+
+        PdPublisherHandle removed = session.removePublisher(1000);
+        assertThat(removed).isNotNull();
+        assertThat(removed.getComId()).isEqualTo(1000);
+        assertThat(session.getPublisherCount()).isZero();
+
+        // Re-remove returns null
+        assertThat(session.removePublisher(1000)).isNull();
+    }
+
+    @Test
+    void testRemovePublisherCancelsCyclicTask() throws Exception {
+        UdpTransport receiver = new UdpTransport(19205);
+        try {
+            session = new TrdpPdSession(0);
+            PdPublisherHandle pub = session.addPublisher(1000, "127.0.0.1", 19205, 50_000);
+            session.start();
+            pub.putData("cyclic".getBytes());
+
+            // Wait for at least one packet
+            byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
+            int len = receiver.receive(buffer, 2000);
+            assertThat(len).isGreaterThan(0);
+
+            // Remove publisher
+            session.removePublisher(1000);
+            Thread.sleep(200);
+
+            // No more packets should arrive
+            len = receiver.receive(buffer, 300);
+            assertThat(len).isZero();
+        } finally {
+            receiver.close();
+        }
+    }
+
+    @Test
+    void testRemovePublisherBeforeStart() throws Exception {
+        session = new TrdpPdSession(19206);
+        session.addPublisher(1000, "127.0.0.1", 17224, 100_000);
+
+        PdPublisherHandle removed = session.removePublisher(1000);
+        assertThat(removed).isNotNull();
+        assertThat(session.getPublisherCount()).isZero();
+    }
+
+    @Test
+    void testRemoveSubscribers() throws Exception {
+        session = new TrdpPdSession(19207);
+        session.addSubscriber(2000, null, 0, new NoOpPdEventListener());
+        session.addSubscriber(2000, null, 0, new NoOpPdEventListener());
+        assertThat(session.getSubscriberCount()).isEqualTo(2);
+
+        List<PdSubscriberHandle> removed = session.removeSubscribers(2000);
+        assertThat(removed).hasSize(2);
+        assertThat(session.getSubscriberCount()).isZero();
+    }
+
+    @Test
+    void testRemoveSubscribersStopsCallbacks() throws Exception {
+        int port = 19208;
+        int comId = 5002;
+        AtomicInteger callbackCount = new AtomicInteger();
+        CountDownLatch firstLatch = new CountDownLatch(1);
+
+        session = new TrdpPdSession(port);
+        session.addSubscriber(comId, null, 0, new PdEventListener() {
+            @Override public void onData(PdEvent event) {
+                callbackCount.incrementAndGet();
+                firstLatch.countDown();
+            }
+            @Override public void onTimeout(PdEvent event) {}
+            @Override public void onValidityRestored(PdEvent event) {}
+        });
+        session.start();
+
+        UdpTransport sender = new UdpTransport(0);
+        try {
+            TrdpPdHeader header = new TrdpPdHeader();
+            header.setSequenceCounter(0);
+            header.setMessageType(TrdpMessageType.PD);
+            header.setComId(comId);
+            header.setDatasetLength(1);
+            TrdpPacket packet = new TrdpPacket(header, new byte[]{1});
+            sender.send(packet.encode(), InetAddress.getByName("127.0.0.1"), port);
+
+            assertThat(firstLatch.await(2, TimeUnit.SECONDS)).isTrue();
+            assertThat(callbackCount.get()).isEqualTo(1);
+
+            // Remove subscribers
+            session.removeSubscribers(comId);
+            Thread.sleep(100);
+
+            // Send another packet — should not trigger callback
+            header = new TrdpPdHeader();
+            header.setSequenceCounter(1);
+            header.setMessageType(TrdpMessageType.PD);
+            header.setComId(comId);
+            header.setDatasetLength(1);
+            packet = new TrdpPacket(header, new byte[]{2});
+            sender.send(packet.encode(), InetAddress.getByName("127.0.0.1"), port);
+            Thread.sleep(300);
+
+            assertThat(callbackCount.get()).isEqualTo(1);
+        } finally {
+            sender.close();
+        }
+    }
+
+    @Test
+    void testRemoveNonexistentPublisherReturnsNull() throws Exception {
+        session = new TrdpPdSession(19209);
+        assertThat(session.removePublisher(9999)).isNull();
+    }
+
+    @Test
+    void testRemoveNonexistentSubscribersReturnsEmptyList() throws Exception {
+        session = new TrdpPdSession(19210);
+        assertThat(session.removeSubscribers(9999)).isEmpty();
+    }
+
+    @Test
+    void testAddPublisherAfterStartDuplicateThrows() throws Exception {
+        session = new TrdpPdSession(19211);
+        session.addPublisher(1000, "127.0.0.1", 17224, 0);
+        session.start();
+
+        assertThatThrownBy(() -> session.addPublisher(1000, "127.0.0.2", 17224, 0))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void testReAddPublisherAfterRemove() throws Exception {
+        session = new TrdpPdSession(19212);
+        session.addPublisher(1000, "127.0.0.1", 17224, 0);
+        session.removePublisher(1000);
+
+        PdPublisherHandle handle = session.addPublisher(1000, "127.0.0.1", 17224, 50_000);
+        assertThat(handle.getComId()).isEqualTo(1000);
+        assertThat(session.getPublisherCount()).isEqualTo(1);
+    }
+
+    @Test
+    void testReAddSubscriberAfterRemove() throws Exception {
+        session = new TrdpPdSession(19213);
+        session.addSubscriber(2000, null, 0, new NoOpPdEventListener());
+        session.removeSubscribers(2000);
+        assertThat(session.getSubscriberCount()).isZero();
+
+        session.addSubscriber(2000, null, 0, new NoOpPdEventListener());
+        assertThat(session.getSubscriberCount()).isEqualTo(1);
     }
 
     // --- Traffic shaping tests ---

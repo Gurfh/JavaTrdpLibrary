@@ -511,6 +511,92 @@ class PdSessionIT {
         }
     }
 
+    // --- Dynamic add/remove integration tests ---
+
+    @Test
+    void testDynamicPublisherAddRemove() throws Exception {
+        int receiverPort = 19300;
+        int comId = 7000;
+        UdpTransport receiver = new UdpTransport(receiverPort);
+        try {
+            session = new TrdpPdSession(0);
+            session.start();
+
+            // Add cyclic publisher on running session
+            PdPublisherHandle pub = session.addPublisher(comId, "127.0.0.1", receiverPort, 50_000);
+            pub.putData("phase1".getBytes());
+
+            // Verify packets arrive
+            byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
+            int len = receiver.receive(buffer, 2000);
+            assertThat(len).isGreaterThan(0);
+            TrdpPacket pkt = TrdpPacket.decode(Arrays.copyOf(buffer, len));
+            assertThat(pkt.getPayload()).isEqualTo("phase1".getBytes());
+
+            // Remove publisher
+            session.removePublisher(comId);
+            Thread.sleep(200);
+
+            // No more packets should arrive
+            len = receiver.receive(buffer, 300);
+            assertThat(len).isZero();
+
+            // Re-add publisher with same ComId
+            PdPublisherHandle pub2 = session.addPublisher(comId, "127.0.0.1", receiverPort, 50_000);
+            pub2.putData("phase2".getBytes());
+
+            // Packets resume
+            len = receiver.receive(buffer, 2000);
+            assertThat(len).isGreaterThan(0);
+            pkt = TrdpPacket.decode(Arrays.copyOf(buffer, len));
+            assertThat(pkt.getPayload()).isEqualTo("phase2".getBytes());
+        } finally {
+            receiver.close();
+        }
+    }
+
+    @Test
+    void testDynamicSubscriberAddRemove() throws Exception {
+        int port = 19301;
+        int comId = 7100;
+
+        session = new TrdpPdSession(port);
+        session.start();
+
+        // Add subscriber on running session
+        CountDownLatch dataLatch = new CountDownLatch(1);
+        AtomicReference<byte[]> receivedData = new AtomicReference<>();
+        PdSubscriberHandle sub = session.addSubscriber(comId, null, 0, new PdEventListener() {
+            @Override public void onData(PdEvent event) {
+                receivedData.set(event.getData());
+                dataLatch.countDown();
+            }
+            @Override public void onTimeout(PdEvent event) {}
+            @Override public void onValidityRestored(PdEvent event) {}
+        });
+
+        Thread.sleep(100);
+
+        externalTransport = new UdpTransport(0);
+        sendPdPacket(externalTransport, comId, "sub-data".getBytes(), "127.0.0.1", port, TrdpMessageType.PD, 0);
+
+        assertThat(dataLatch.await(3, TimeUnit.SECONDS)).isTrue();
+        assertThat(receivedData.get()).isEqualTo("sub-data".getBytes());
+
+        // Remove subscriber
+        session.removeSubscribers(comId);
+        Thread.sleep(100);
+
+        // Send another packet — no callback expected
+        AtomicInteger extraCallbacks = new AtomicInteger();
+        // We can't add a listener to the removed subscriber, so just verify no exception
+        sendPdPacket(externalTransport, comId, "no-recv".getBytes(), "127.0.0.1", port, TrdpMessageType.PD, 1);
+        Thread.sleep(300);
+
+        // Original handle's packets received count should still be 1
+        assertThat(sub.getPacketsReceived()).isEqualTo(1);
+    }
+
     // --- Helpers ---
 
     private void sendPdPacket(UdpTransport transport, int comId, byte[] data,

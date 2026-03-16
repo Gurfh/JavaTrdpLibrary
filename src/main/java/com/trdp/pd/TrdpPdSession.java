@@ -46,11 +46,16 @@ import java.util.concurrent.atomic.AtomicReference;
  *     PdSubscriberHandle sub = session.addSubscriber(2000, "239.255.0.1", 100_000, listener);
  *     session.start();
  *     pub.putData(data);
+ *     // Dynamic add/remove after start:
+ *     PdPublisherHandle pub2 = session.addPublisher(1001, "239.255.0.1", 17224, 50_000);
+ *     session.removePublisher(1001);
  * }
  * }</pre>
  * <p>
- * Registration methods ({@link #addPublisher}, {@link #addSubscriber}) must be called
- * before {@link #start()}. Callbacks run on the receive thread.
+ * Registration methods ({@link #addPublisher}, {@link #addSubscriber}) can be called
+ * before or after {@link #start()}. Publishers added after start are not traffic-shaped.
+ * {@link #removePublisher(int)} and {@link #removeSubscribers(int)} allow removal at any time.
+ * Callbacks run on the receive thread.
  */
 public class TrdpPdSession implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(TrdpPdSession.class);
@@ -72,8 +77,8 @@ public class TrdpPdSession implements AutoCloseable {
     // Multicast groups already joined (avoid duplicate joins)
     private final Set<InetAddress> joinedGroups = ConcurrentHashMap.newKeySet();
 
-    // Shared cyclic send scheduler (created lazily in start() if needed)
-    private ScheduledExecutorService sendScheduler;
+    // Shared cyclic send scheduler (created in start(), used by dynamic addPublisher)
+    private volatile ScheduledExecutorService sendScheduler;
 
     // Receive thread
     private final ExecutorService receiveExecutor;
@@ -117,21 +122,18 @@ public class TrdpPdSession implements AutoCloseable {
 
     /**
      * Registers a publisher for the given ComId.
-     * Must be called before {@link #start()}.
+     * Can be called before or after {@link #start()}. Publishers added after start
+     * use their interval as initial delay (no traffic shaping stagger).
      *
      * @param comId The ComID to publish.
      * @param destinationAddress The destination address for push/cyclic sends.
      * @param destinationPort The destination port for push/cyclic sends.
      * @param intervalUs The cyclic send interval in microseconds. 0 means no cyclic send.
      * @return A handle for staging and sending data.
-     * @throws IllegalStateException If the session has already been started.
      * @throws IllegalArgumentException If a publisher for this ComId already exists, or intervalUs is negative.
      */
     public PdPublisherHandle addPublisher(int comId, String destinationAddress,
                                           int destinationPort, long intervalUs) throws IOException {
-        if (started) {
-            throw new IllegalStateException("Cannot add publisher after session has started");
-        }
         if (intervalUs < 0) {
             throw new IllegalArgumentException("intervalUs must be >= 0");
         }
@@ -142,6 +144,12 @@ public class TrdpPdSession implements AutoCloseable {
             throw new IllegalArgumentException("Publisher already registered for ComId " + comId);
         }
 
+        if (started && entry.intervalUs > 0) {
+            entry.cyclicTask = sendScheduler.scheduleAtFixedRate(
+                    () -> cyclicSend(entry),
+                    entry.intervalUs, entry.intervalUs, TimeUnit.MICROSECONDS);
+        }
+
         logger.info("PD Session: added publisher ComID {} -> {}:{}, interval={}us",
                 comId, destinationAddress, destinationPort, intervalUs);
         return entry;
@@ -149,21 +157,16 @@ public class TrdpPdSession implements AutoCloseable {
 
     /**
      * Registers a subscriber for the given ComId.
-     * Must be called before {@link #start()}.
+     * Can be called before or after {@link #start()}.
      *
      * @param comId The ComID to subscribe to.
      * @param multicastGroup The multicast group to join, or null for unicast-only.
      * @param timeoutUs Timeout in microseconds (0 to disable timeout detection).
      * @param listener The listener to receive callbacks.
      * @return A handle for querying status and statistics.
-     * @throws IllegalStateException If the session has already been started.
      */
     public PdSubscriberHandle addSubscriber(int comId, String multicastGroup,
                                             long timeoutUs, PdEventListener listener) throws IOException {
-        if (started) {
-            throw new IllegalStateException("Cannot add subscriber after session has started");
-        }
-
         // Join multicast group if needed (deduplicated)
         if (multicastGroup != null) {
             InetAddress groupAddr = InetAddress.getByName(multicastGroup);
@@ -174,10 +177,45 @@ public class TrdpPdSession implements AutoCloseable {
         }
 
         SubscriberEntry entry = new SubscriberEntry(comId, timeoutUs, listener);
+        if (started) {
+            entry.lastReceivedTimeNanos = System.nanoTime();
+        }
         subscribers.computeIfAbsent(comId, k -> new CopyOnWriteArrayList<>()).add(entry);
 
         logger.info("PD Session: added subscriber ComID {}, timeout={}us", comId, timeoutUs);
         return entry;
+    }
+
+    /**
+     * Removes the publisher for the given ComId.
+     *
+     * @param comId The ComID of the publisher to remove.
+     * @return The removed publisher handle, or {@code null} if no publisher existed for this ComId.
+     */
+    public PdPublisherHandle removePublisher(int comId) {
+        PublisherEntry entry = publishers.remove(comId);
+        if (entry != null) {
+            if (entry.cyclicTask != null) {
+                entry.cyclicTask.cancel(false);
+            }
+            logger.info("PD Session: removed publisher ComID {}", comId);
+        }
+        return entry;
+    }
+
+    /**
+     * Removes all subscribers for the given ComId.
+     *
+     * @param comId The ComID of the subscribers to remove.
+     * @return The list of removed subscriber handles, or an empty list if none existed.
+     */
+    public List<PdSubscriberHandle> removeSubscribers(int comId) {
+        CopyOnWriteArrayList<SubscriberEntry> removed = subscribers.remove(comId);
+        if (removed != null && !removed.isEmpty()) {
+            logger.info("PD Session: removed {} subscriber(s) for ComID {}", removed.size(), comId);
+            return List.copyOf(removed);
+        }
+        return List.of();
     }
 
     /**
@@ -213,7 +251,7 @@ public class TrdpPdSession implements AutoCloseable {
 
     /**
      * Starts the session: begins cyclic sends and the receive loop.
-     * No more publishers or subscribers may be added after this call.
+     * Publishers and subscribers may still be added or removed after this call.
      *
      * @throws IllegalStateException If the session has already been started.
      */
@@ -224,22 +262,19 @@ public class TrdpPdSession implements AutoCloseable {
         started = true;
         running = true;
 
-        // Create and start send scheduler if any publisher has cyclic interval
-        boolean needsCyclic = publishers.values().stream().anyMatch(e -> e.intervalUs > 0);
-        if (needsCyclic) {
-            sendScheduler = new ScheduledThreadPoolExecutor(1, r -> {
-                Thread t = new Thread(r, "PD-Session-Send-" + transport.getLocalPort());
-                t.setDaemon(true);
-                return t;
-            });
-            Map<Integer, Long> initialDelays = computeInitialDelays();
-            for (PublisherEntry entry : publishers.values()) {
-                if (entry.intervalUs > 0) {
-                    long initialDelay = initialDelays.getOrDefault(entry.comId, entry.intervalUs);
-                    entry.cyclicTask = sendScheduler.scheduleAtFixedRate(
-                            () -> cyclicSend(entry),
-                            initialDelay, entry.intervalUs, TimeUnit.MICROSECONDS);
-                }
+        // Always create send scheduler (supports dynamic addPublisher after start)
+        sendScheduler = new ScheduledThreadPoolExecutor(1, r -> {
+            Thread t = new Thread(r, "PD-Session-Send-" + transport.getLocalPort());
+            t.setDaemon(true);
+            return t;
+        });
+        Map<Integer, Long> initialDelays = computeInitialDelays();
+        for (PublisherEntry entry : publishers.values()) {
+            if (entry.intervalUs > 0) {
+                long initialDelay = initialDelays.getOrDefault(entry.comId, entry.intervalUs);
+                entry.cyclicTask = sendScheduler.scheduleAtFixedRate(
+                        () -> cyclicSend(entry),
+                        initialDelay, entry.intervalUs, TimeUnit.MICROSECONDS);
             }
         }
 

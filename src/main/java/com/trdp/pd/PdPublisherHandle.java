@@ -1,6 +1,7 @@
 package com.trdp.pd;
 
 import java.io.IOException;
+import java.util.function.Supplier;
 
 /**
  * Handle to a publisher registered with a {@link TrdpPdSession}.
@@ -17,6 +18,19 @@ public interface PdPublisherHandle {
      * @throws IllegalArgumentException if data exceeds maximum PD data size.
      */
     void putData(byte[] data);
+
+    /**
+     * Sets a supplier that provides fresh data for each cyclic send.
+     * When set, the supplier is called before each cyclic send instead of
+     * using the static data from {@link #putData(byte[])}. This allows
+     * building dynamic data (e.g. incrementing counters) in sync with
+     * actual packet sends.
+     *
+     * <p>Set to {@code null} to revert to static data staging via {@link #putData(byte[])}.
+     *
+     * @param supplier a supplier that returns the process data bytes, or null to disable
+     */
+    void setDataSupplier(Supplier<byte[]> supplier);
 
     /**
      * Updates the data and immediately sends it to the configured destination.

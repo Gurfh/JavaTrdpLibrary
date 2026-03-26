@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -582,8 +583,9 @@ public class TrdpPdSession implements AutoCloseable {
     // --- Send ---
 
     private void cyclicSend(PublisherEntry entry) {
-        byte[] data = entry.currentData.get();
-        if (data.length == 0) return;
+        Supplier<byte[]> supplier = entry.dataSupplier;
+        byte[] data = supplier != null ? supplier.get() : entry.currentData.get();
+        if (data == null || data.length == 0) return;
         try {
             sendPd(entry, data, entry.destinationAddress, entry.destinationPort,
                     TrdpMessageType.PD, 0);
@@ -623,6 +625,7 @@ public class TrdpPdSession implements AutoCloseable {
         final long intervalUs;
         final AtomicInteger sequenceCounter = new AtomicInteger(0);
         final AtomicReference<byte[]> currentData = new AtomicReference<>(new byte[0]);
+        volatile Supplier<byte[]> dataSupplier;
         volatile ScheduledFuture<?> cyclicTask;
         final AtomicLong packetsSent = new AtomicLong();
         final AtomicLong sendErrors = new AtomicLong();
@@ -640,6 +643,11 @@ public class TrdpPdSession implements AutoCloseable {
                 throw new IllegalArgumentException("Data size exceeds maximum PD data size");
             }
             currentData.set(Arrays.copyOf(data, data.length));
+        }
+
+        @Override
+        public void setDataSupplier(Supplier<byte[]> supplier) {
+            this.dataSupplier = supplier;
         }
 
         @Override

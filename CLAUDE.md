@@ -17,7 +17,7 @@ mvn test -Dtest=TrdpPdSessionTest#testAddPublisher   # Single test method
 mvn package                                          # Package JAR
 ```
 
-Java 21 minimum.
+Java 25 minimum.
 
 ## Architecture
 

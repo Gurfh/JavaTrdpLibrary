@@ -16,8 +16,8 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
+        <maven.compiler.source>25</maven.compiler.source>
+        <maven.compiler.target>25</maven.compiler.target>
         <jna.version>5.16.0</jna.version>
         <junit.version>5.10.1</junit.version>
         <mockito.version>5.8.0</mockito.version>
@@ -109,8 +109,8 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.12.1</version>
                 <configuration>
-                    <source>21</source>
-                    <target>21</target>
+                    <source>25</source>
+                    <target>25</target>
                 </configuration>
             </plugin>
 
@@ -145,11 +145,11 @@
                 <artifactId>maven-javadoc-plugin</artifactId>
                 <version>3.6.3</version>
                 <configuration>
-                    <source>21</source>
+                    <source>25</source>
                     <show>protected</show>
                     <additionalJOption>--allow-script-in-comments</additionalJOption>
                     <links>
-                        <link>https://docs.oracle.com/en/java/javase/21/docs/api/</link>
+                        <link>https://docs.oracle.com/en/java/javase/25/docs/api/</link>
                     </links>
                     <windowtitle>TRDP Protocol Library API</windowtitle>
                     <doctitle>TRDP Protocol Library API</doctitle>

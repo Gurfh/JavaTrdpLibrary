@@ -71,7 +71,7 @@ A Java implementation of the Train Real-Time Data Protocol (TRDP) as defined in 
 
 ## Requirements
 
-- Java 21 or later
+- Java 25 or later
 - Maven 3.8+
 - JVM flag `--add-opens java.base/sun.nio.ch=ALL-UNNAMED` for native file descriptor extraction used by unicast TTL (included in `.mvn/jvm.config` for Maven builds; add to your deployment JVM args)
 

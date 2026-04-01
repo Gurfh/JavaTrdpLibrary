@@ -143,7 +143,7 @@ public class DatasetMarshaller {
         List<TrdpDataset.FieldDefinition> schema = new ArrayList<>();
         for (DataSetElement elem : dsDef.getElements()) {
             String typeName = elem.getType();
-            int arraySize = (int) elem.getArraySize();
+            int arraySize = Math.max(1, (int) elem.getArraySize());
 
             // Resolve type: numeric ID (1..16 = primitive, >= 1000 = nested dataset) or type name
             TrdpDataType dataType = null;

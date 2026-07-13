@@ -19,6 +19,10 @@ mvn package                                          # Package JAR
 
 Java 25 minimum.
 
+## Release Process
+
+Releases are lightweight git tags `vX.Y.Z` on `master` plus a GitHub release (`gh release create vX.Y.Z --verify-tag --notes-file ...`). The pom `<version>` tracks the **next** release tag (e.g. pom says `1.0.28` while `v1.0.27` is the latest tag), so the artifact built at tag time matches the tag. After tagging and releasing `vX.Y.Z`, bump the pom to the next patch version in the same or next commit. Run the full build with javadoc before tagging: `JAVA_HOME=<jdk> mvn clean verify`.
+
 ## Architecture
 
 All source lives under `src/main/java/com/trdp/`, tests under `src/test/java/com/trdp/`.

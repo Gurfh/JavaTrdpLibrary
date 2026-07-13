@@ -1,5 +1,6 @@
 package com.trdp.config;
 
+import com.trdp.md.MdReply;
 import com.trdp.md.MdRequestHandler;
 import com.trdp.md.MdResponse;
 import com.trdp.md.TransportProtocol;
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -145,6 +147,8 @@ class TrdpSessionFactoryIT {
             assertThat(session.getRequester()).isNotNull();
             assertThat(session.getReplier()).isNotNull();
             assertThat(session.getMarshaller()).isNotNull();
+            // Distinct udp-port/tcp-port → separate sockets, no dispatcher
+            assertThat(session.getDispatcher()).isNull();
         }
     }
 
@@ -185,19 +189,27 @@ class TrdpSessionFactoryIT {
     }
 
     @Test
-    void configureMdRejectsEqualUdpAndTcpPorts() throws Exception {
+    void configureMdSharedPortRoundTrip() throws Exception {
         DeviceConfig config = TrdpConfig.load(Path.of("src/test/resources/trdp-config-full.xml"));
-        MdRequestHandler handler = request -> new MdResponse("reply".getBytes());
+        MdRequestHandler handler = request -> new MdResponse("pong".getBytes());
 
-        // Defaulted md-com-parameter: udp-port and tcp-port both 17225
+        // udp-port == tcp-port → IEC-standard single MD port: shared UDP socket + dispatcher
         MdComParameter mdCom = new MdComParameter(null, null, null, null, null, null,
-                null, null, null, null, null, null);
-        BusInterface bi = new BusInterface(1, "equal-ports", null, null, null, null, mdCom, null);
+                null, null, null, 17510L, 17510L, null);
+        BusInterface bi = new BusInterface(1, "shared-port", null, null, null, null, mdCom, null);
 
-        assertThatThrownBy(() -> TrdpSessionFactory.configureMd(config, bi, handler))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("udp-port")
-                .hasMessageContaining("17225");
+        try (TrdpSessionFactory.ConfiguredMdSession session =
+                     TrdpSessionFactory.configureMd(config, bi, handler)) {
+            assertThat(session.getDispatcher()).isNotNull();
+            session.start();
+
+            // Self round trip over the single shared socket: Mr and Mp both
+            // arrive on the same port and must be routed by message type.
+            MdReply reply = session.getRequester()
+                    .sendRequest(9100, "ping".getBytes(), "127.0.0.1", 17510)
+                    .get(5, TimeUnit.SECONDS);
+            assertThat(reply.getData()).isEqualTo("pong".getBytes());
+        }
     }
 
     @Test

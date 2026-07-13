@@ -19,7 +19,6 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
-import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
@@ -39,7 +38,16 @@ public class MdReplier implements AutoCloseable {
     private static final int MAX_WORKER_THREADS = 16;
     private static final int WORKER_QUEUE_CAPACITY = 64;
 
+    /**
+     * How long a completed session is remembered for duplicate-request detection.
+     * Covers the maximum requester retry window: (maxRetries + 1) x reply timeout
+     * with default values (3 x 5s), with headroom.
+     */
+    private static final long DUPLICATE_CACHE_TTL_NANOS = TimeUnit.SECONDS.toNanos(30);
+    private static final int DUPLICATE_CACHE_MAX_ENTRIES = 10_000;
+
     private final UdpTransport udpTransport;
+    private final boolean ownsUdpTransport;
     private final ServerSocket tcpListener;
     private final MdRequestHandler handler;
     private final ExecutorService executor; // Manages listener threads
@@ -50,6 +58,10 @@ public class MdReplier implements AutoCloseable {
     private final ConcurrentHashMap<UUID, Long> pendingConfirmations;
     private ScheduledExecutorService confirmTimeoutChecker;
     private volatile ScheduledFuture<?> pendingConfirmCheck;
+
+    // Session dedup: requester retries reuse the session UUID, so a repeated
+    // request must not re-invoke the handler (IEC 61375-2-3 session handling).
+    private final ConcurrentHashMap<UUID, SessionState> recentSessions = new ConcurrentHashMap<>();
 
     private int actualEtbTopoCnt = 0;
     private int actualOpTrnTopoCnt = 0;
@@ -75,18 +87,48 @@ public class MdReplier implements AutoCloseable {
      */
     public MdReplier(int port, MdRequestHandler handler, long confirmTimeoutUs,
                      InetAddress bindAddress, int ttl, int qos) throws IOException {
+        this(new UdpTransport(port, bindAddress, ttl, UdpTransport.qosToTrafficClass(qos)), true,
+                port, handler, confirmTimeoutUs, bindAddress);
+    }
+
+    /**
+     * Creates an MD replier that receives UDP packets through a shared transport
+     * instead of its own socket. The transport is owned by the caller (typically
+     * an {@link MdUdpDispatcher}, which runs the receive loop and routes request,
+     * notification, and confirm packets here); this replier only sends on it and
+     * never closes it. The TCP listener is still owned by this replier.
+     *
+     * @param sharedTransport  the shared UDP transport (used for sending replies)
+     * @param tcpPort          the TCP port to listen on
+     * @param handler          the request handler callback
+     * @param confirmTimeoutUs the confirmation timeout in microseconds
+     * @param bindAddress      the local address to bind the TCP listener to, or {@code null} for wildcard
+     * @throws IOException if TCP socket creation fails
+     */
+    public static MdReplier forSharedTransport(UdpTransport sharedTransport, int tcpPort,
+                                               MdRequestHandler handler, long confirmTimeoutUs,
+                                               InetAddress bindAddress) throws IOException {
+        return new MdReplier(sharedTransport, false, tcpPort, handler, confirmTimeoutUs, bindAddress);
+    }
+
+    private MdReplier(UdpTransport udpTransport, boolean ownsUdpTransport, int tcpPort,
+                      MdRequestHandler handler, long confirmTimeoutUs,
+                      InetAddress bindAddress) throws IOException {
         this.confirmTimeoutUs = confirmTimeoutUs;
         this.pendingConfirmations = new ConcurrentHashMap<>();
-        this.udpTransport = new UdpTransport(port, bindAddress, ttl, UdpTransport.qosToTrafficClass(qos));
+        this.udpTransport = udpTransport;
+        this.ownsUdpTransport = ownsUdpTransport;
         try {
             if (bindAddress != null) {
                 this.tcpListener = new ServerSocket();
-                this.tcpListener.bind(new InetSocketAddress(bindAddress, port));
+                this.tcpListener.bind(new InetSocketAddress(bindAddress, tcpPort));
             } else {
-                this.tcpListener = new ServerSocket(port);
+                this.tcpListener = new ServerSocket(tcpPort);
             }
         } catch (IOException e) {
-            udpTransport.close();
+            if (ownsUdpTransport) {
+                udpTransport.close();
+            }
             throw e;
         }
         this.handler = handler;
@@ -103,7 +145,22 @@ public class MdReplier implements AutoCloseable {
             new LinkedBlockingQueue<>(WORKER_QUEUE_CAPACITY),
             new ThreadPoolExecutor.CallerRunsPolicy());
 
-        logger.info("MD Replier created on port {}", port);
+        logger.info("MD Replier created (UDP port {}, TCP port {})",
+                udpTransport.getLocalPort(), tcpListener.getLocalPort());
+    }
+
+    /**
+     * Returns the local UDP port replies and confirms are exchanged on.
+     */
+    public int getUdpPort() {
+        return udpTransport.getLocalPort();
+    }
+
+    /**
+     * Returns the local TCP port this replier accepts connections on.
+     */
+    public int getTcpPort() {
+        return tcpListener.getLocalPort();
     }
 
     public void setTopologyCounters(int etbTopoCnt, int opTrnTopoCnt) {
@@ -122,7 +179,9 @@ public class MdReplier implements AutoCloseable {
     public void start() {
         if (running) return;
         running = true;
-        executor.submit(this::udpReceiveLoop);
+        if (ownsUdpTransport) {
+            executor.submit(this::udpReceiveLoop);
+        }
         executor.submit(this::tcpAcceptLoop);
 
         if (confirmTimeoutUs > 0) {
@@ -145,18 +204,28 @@ public class MdReplier implements AutoCloseable {
             try {
                 ReceivedPacket received = udpTransport.receiveWithSource(buffer, pollTimeoutMs);
                 if (received != null) {
-                    // Copy data because the buffer is reused in the loop
-                    byte[] dataCopy = Arrays.copyOf(received.getData(), received.getLength());
-
-                    // Offload processing to worker pool
-                    workerPool.submit(() ->
-                        processRequest(dataCopy, received.getSourceAddress(), received.getSourcePort(), null)
-                    );
+                    dispatchUdp(received);
                 }
             } catch (IOException e) {
                 if (running) logger.error("Error receiving UDP MD request", e);
             }
         }
+    }
+
+    /**
+     * Feeds an incoming UDP packet into the worker pool. Called from the own
+     * receive loop or from an {@link MdUdpDispatcher} sharing the socket.
+     */
+    void dispatchUdp(ReceivedPacket received) {
+        // ReceivedPacket already holds an exact-length defensive copy
+        byte[] data = received.getData();
+        workerPool.submit(() ->
+            processRequest(data, received.getSourceAddress(), received.getSourcePort(), null)
+        );
+    }
+
+    boolean isStarted() {
+        return running;
     }
 
     // --- TCP Handling ---
@@ -252,21 +321,53 @@ public class MdReplier implements AutoCloseable {
             if (reqHeader.getMessageType() == TrdpMessageType.MD_REQUEST ||
                 reqHeader.getMessageType() == TrdpMessageType.MD_NOTIFICATION) {
 
+                UUID sessionId = reqHeader.getSessionIdAsUuid();
+                evictExpiredSessions();
+
+                SessionState session = new SessionState(System.nanoTime());
+                SessionState existing = recentSessions.putIfAbsent(sessionId, session);
+                if (existing != null) {
+                    // Duplicate (e.g. requester retry reusing the session UUID):
+                    // never re-invoke the handler. Repeat the cached reply if one
+                    // was already sent; if the original is still being processed,
+                    // its reply will go out when the handler completes.
+                    byte[] cached = existing.encodedReply;
+                    if (cached != null) {
+                        writeReply(cached, sourceAddress, sourcePort, tcpSocket);
+                        logger.debug("Repeated cached MD reply for duplicate request: SessionID={}", sessionId);
+                    } else {
+                        logger.debug("Discarded duplicate MD request (in progress): SessionID={}", sessionId);
+                    }
+                    return;
+                }
+                if (recentSessions.size() > DUPLICATE_CACHE_MAX_ENTRIES) {
+                    // Cache flooded with unique sessions: degrade to no dedup for
+                    // this session rather than growing without bound.
+                    recentSessions.remove(sessionId, session);
+                }
+
                 MdRequest request = new MdRequest(
                     reqHeader.getComId(),
                     requestPacket.getPayload(),
-                    reqHeader.getSessionIdAsUuid(),
+                    sessionId,
                     reqHeader.getSourceUriString(),
                     reqHeader.getDestinationUriString(),
                     sourceAddress,
                     sourcePort,
-                    reqHeader.getSequenceCounter()
+                    reqHeader.getSequenceCounter(),
+                    reqHeader.getMessageType()
                 );
 
                 MdResponse response = handler.handleRequest(request);
 
                 if (response != null) {
-                    sendReply(reqHeader, response, sourceAddress, sourcePort, tcpSocket);
+                    if (reqHeader.getMessageType() == TrdpMessageType.MD_NOTIFICATION) {
+                        // Mn is fire-and-forget: replying would violate IEC 61375-2-3
+                        logger.warn("Handler returned a response for notification (Mn) ComID {} — discarded, notifications must not be replied to",
+                                reqHeader.getComId());
+                    } else {
+                        session.encodedReply = sendReply(reqHeader, response, sourceAddress, sourcePort, tcpSocket);
+                    }
                 }
             }
             else if (reqHeader.getMessageType() == TrdpMessageType.MD_CONFIRM) {
@@ -297,8 +398,12 @@ public class MdReplier implements AutoCloseable {
         }
     }
 
-    private void sendReply(TrdpMdHeader reqHeader, MdResponse response,
-                           InetAddress destAddress, int destPort, Socket tcpSocket) throws IOException {
+    /**
+     * Builds and sends the reply, returning the encoded packet so it can be
+     * cached for duplicate-request repetition.
+     */
+    private byte[] sendReply(TrdpMdHeader reqHeader, MdResponse response,
+                             InetAddress destAddress, int destPort, Socket tcpSocket) throws IOException {
 
         TrdpMdHeader replyHeader = new TrdpMdHeader();
         replyHeader.setSequenceCounter(reqHeader.getSequenceCounter());
@@ -321,15 +426,7 @@ public class MdReplier implements AutoCloseable {
         TrdpPacket replyPacket = new TrdpPacket(replyHeader, response.getData());
         byte[] encoded = replyPacket.encode();
 
-        if (tcpSocket != null) {
-            synchronized (tcpSocket) {
-                OutputStream out = tcpSocket.getOutputStream();
-                out.write(encoded);
-                out.flush();
-            }
-        } else {
-            udpTransport.send(encoded, destAddress, destPort);
-        }
+        writeReply(encoded, destAddress, destPort, tcpSocket);
 
         // Track pending confirmation if Mq was sent
         if (response.isConfirmationRequested() && confirmTimeoutUs > 0) {
@@ -339,6 +436,35 @@ public class MdReplier implements AutoCloseable {
         }
 
         logger.debug("Sent MD Reply ({}): SessionID={}", replyHeader.getMessageType(), reqHeader.getSessionIdAsUuid());
+        return encoded;
+    }
+
+    private void writeReply(byte[] encoded, InetAddress destAddress, int destPort,
+                            Socket tcpSocket) throws IOException {
+        if (tcpSocket != null) {
+            synchronized (tcpSocket) {
+                OutputStream out = tcpSocket.getOutputStream();
+                out.write(encoded);
+                out.flush();
+            }
+        } else {
+            udpTransport.send(encoded, destAddress, destPort);
+        }
+    }
+
+    private void evictExpiredSessions() {
+        long now = System.nanoTime();
+        recentSessions.entrySet().removeIf(
+                e -> now - e.getValue().createdNanos > DUPLICATE_CACHE_TTL_NANOS);
+    }
+
+    private static final class SessionState {
+        final long createdNanos;
+        volatile byte[] encodedReply; // set once a reply was sent; stays null for Mn or no reply
+
+        SessionState(long createdNanos) {
+            this.createdNanos = createdNanos;
+        }
     }
 
     private void createConfirmTimeoutChecker() {
@@ -407,7 +533,9 @@ public class MdReplier implements AutoCloseable {
         } catch (IOException e) {
             logger.error("Error closing TCP listener", e);
         }
-        udpTransport.close();
+        if (ownsUdpTransport) {
+            udpTransport.close();
+        }
 
         // 2. Shutdown confirm timeout checker
         ScheduledFuture<?> f = pendingConfirmCheck;
@@ -416,6 +544,7 @@ public class MdReplier implements AutoCloseable {
             confirmTimeoutChecker.shutdownNow();
         }
         pendingConfirmations.clear();
+        recentSessions.clear();
 
         // 3. Shutdown executors (threads should exit quickly now that sockets are closed)
         executor.shutdownNow();

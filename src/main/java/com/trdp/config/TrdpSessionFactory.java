@@ -5,7 +5,9 @@ import com.trdp.md.MdRequestHandler;
 import com.trdp.md.MdRequester;
 import com.trdp.md.MdReply;
 import com.trdp.md.MdResponse;
+import com.trdp.md.MdUdpDispatcher;
 import com.trdp.md.TransportProtocol;
+import com.trdp.network.UdpTransport;
 import com.trdp.pd.PdEventListener;
 import com.trdp.pd.PdPublisherHandle;
 import com.trdp.pd.PdSubscriberHandle;
@@ -236,19 +238,16 @@ public class TrdpSessionFactory {
      * {@link MdParameter} and {@link ComParameter}.
      *
      * <p>
-     * The {@code udp-port} and {@code tcp-port} must differ: the requester binds
-     * a UDP socket on {@code udp-port} and the replier binds both TCP and UDP
-     * sockets on {@code tcp-port}. If both were equal, two UDP sockets would bind
-     * the same port (both with {@code SO_REUSEADDR}) and the kernel would deliver
-     * each incoming datagram to only one of them, silently breaking either
-     * request reception or reply reception.
+     * When {@code udp-port} equals {@code tcp-port} (the IEC 61375-2-3 standard
+     * single MD port, default 17225), the requester and replier share one UDP
+     * socket and an {@link MdUdpDispatcher} routes incoming packets by message
+     * type. With distinct ports, each endpoint binds its own UDP socket.
      *
      * @param config       the parsed device configuration (for dataset resolution)
      * @param busInterface the bus interface to configure
      * @param handler      the request handler for the replier
      * @return a configured MD session with requester, replier, and marshaller
      * @throws IOException if socket creation fails
-     * @throws IllegalArgumentException if {@code udp-port} equals {@code tcp-port}
      */
     public static ConfiguredMdSession configureMd(
             DeviceConfig config, BusInterface busInterface,
@@ -264,13 +263,6 @@ public class TrdpSessionFactory {
 
         int udpPort = (int) mdCom.getUdpPort();
         int tcpPort = (int) mdCom.getTcpPort();
-        if (udpPort == tcpPort) {
-            throw new IllegalArgumentException(
-                    "md-com-parameter udp-port and tcp-port must differ (both are " + udpPort
-                    + "): the requester and replier would bind two UDP sockets on the same port"
-                    + " and incoming datagrams would reach only one of them."
-                    + " Configure distinct udp-port and tcp-port values.");
-        }
         long replyTimeoutUs = mdCom.getReplyTimeout();
         long connectTimeoutUs = mdCom.getConnectTimeout();
         long confirmTimeoutUs = mdCom.getConfirmTimeout();
@@ -279,10 +271,42 @@ public class TrdpSessionFactory {
                 ? TransportProtocol.TCP : TransportProtocol.UDP;
         int defaultRetries = (int) mdCom.getRetries();
 
-        MdRequester requester = new MdRequester(udpPort, replyTimeoutUs, connectTimeoutUs,
-                bindAddress, ttl, qos);
-        MdReplier replier = new MdReplier(tcpPort, handler, confirmTimeoutUs,
-                bindAddress, ttl, qos);
+        MdRequester requester;
+        MdReplier replier;
+        MdUdpDispatcher dispatcher = null;
+
+        if (udpPort == tcpPort) {
+            // IEC-standard single MD port: share one UDP socket, dispatch by message type
+            UdpTransport shared = new UdpTransport(udpPort, bindAddress, ttl,
+                    UdpTransport.qosToTrafficClass(qos));
+            try {
+                requester = MdRequester.forSharedTransport(shared, replyTimeoutUs,
+                        connectTimeoutUs, bindAddress, qos);
+            } catch (IOException | RuntimeException e) {
+                shared.close();
+                throw e;
+            }
+            try {
+                replier = MdReplier.forSharedTransport(shared, tcpPort, handler,
+                        confirmTimeoutUs, bindAddress);
+            } catch (IOException | RuntimeException e) {
+                requester.close();
+                shared.close();
+                throw e;
+            }
+            dispatcher = new MdUdpDispatcher(shared, requester, replier);
+            dispatcher.start();
+        } else {
+            requester = new MdRequester(udpPort, replyTimeoutUs, connectTimeoutUs,
+                    bindAddress, ttl, qos);
+            try {
+                replier = new MdReplier(tcpPort, handler, confirmTimeoutUs,
+                        bindAddress, ttl, qos);
+            } catch (IOException | RuntimeException e) {
+                requester.close();
+                throw e;
+            }
+        }
 
         Map<Integer, MdTelegramConfig> telegramConfigs = new LinkedHashMap<>();
 
@@ -332,7 +356,7 @@ public class TrdpSessionFactory {
                     perReplyTimeout, perConfirmTimeout, perProtocol, perRetries));
         }
 
-        return new ConfiguredMdSession(requester, replier, marshaller, telegramConfigs);
+        return new ConfiguredMdSession(requester, replier, dispatcher, marshaller, telegramConfigs);
     }
 
     /**
@@ -353,14 +377,17 @@ public class TrdpSessionFactory {
 
         private final MdRequester requester;
         private final MdReplier replier;
+        private final MdUdpDispatcher dispatcher; // non-null only in shared-socket mode
         private final DatasetMarshaller marshaller;
         private final Map<Integer, MdTelegramConfig> telegramConfigs;
 
         ConfiguredMdSession(MdRequester requester, MdReplier replier,
+                            MdUdpDispatcher dispatcher,
                             DatasetMarshaller marshaller,
                             Map<Integer, MdTelegramConfig> telegramConfigs) {
             this.requester = requester;
             this.replier = replier;
+            this.dispatcher = dispatcher;
             this.marshaller = marshaller;
             this.telegramConfigs = Collections.unmodifiableMap(telegramConfigs);
         }
@@ -445,8 +472,19 @@ public class TrdpSessionFactory {
             return requester.sendRequest(comId, data, destinationAddress, destinationPort);
         }
 
+        /**
+         * Returns the shared-socket dispatcher, or {@code null} when the
+         * requester and replier use separate UDP sockets (distinct ports).
+         */
+        public MdUdpDispatcher getDispatcher() {
+            return dispatcher;
+        }
+
         @Override
         public void close() {
+            if (dispatcher != null) {
+                dispatcher.close();
+            }
             requester.close();
             replier.close();
         }

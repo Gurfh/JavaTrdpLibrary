@@ -37,6 +37,7 @@ public class MdRequester implements AutoCloseable {
     private static final int MAX_TCP_CONNECTIONS = 16;
 
     private final UdpTransport udpTransport;
+    private final boolean ownsUdpTransport;
     private final ConcurrentHashMap<String, TcpTransport> tcpConnections;
     private final List<Thread> listenerThreads = new CopyOnWriteArrayList<>();
     private final AtomicInteger sequenceCounter;
@@ -72,6 +73,10 @@ public class MdRequester implements AutoCloseable {
         this(localPort, replyTimeoutUs, TrdpConstants.DEFAULT_MD_CONNECT_TIMEOUT_US);
     }
 
+    public MdRequester(int localPort, long replyTimeoutUs, long connectTimeoutUs) throws IOException {
+        this(localPort, replyTimeoutUs, connectTimeoutUs, null, 64, 3);
+    }
+
     /**
      * Creates an MD requester with custom socket options.
      *
@@ -85,11 +90,39 @@ public class MdRequester implements AutoCloseable {
      */
     public MdRequester(int localPort, long replyTimeoutUs, long connectTimeoutUs,
                        InetAddress bindAddress, int ttl, int qos) throws IOException {
+        this(new UdpTransport(localPort, bindAddress, ttl, UdpTransport.qosToTrafficClass(qos)), true,
+                replyTimeoutUs, connectTimeoutUs, bindAddress, UdpTransport.qosToTrafficClass(qos));
+    }
+
+    /**
+     * Creates an MD requester that receives UDP packets through a shared transport
+     * instead of its own receive loop. The transport is owned by the caller
+     * (typically an {@link MdUdpDispatcher}, which runs the receive loop and routes
+     * reply packets here); this requester sends on it but never closes it.
+     *
+     * @param sharedTransport  the shared UDP transport (used for sending requests and confirms)
+     * @param replyTimeoutUs   the default reply timeout in microseconds
+     * @param connectTimeoutUs the TCP connect/idle timeout in microseconds
+     * @param bindAddress      the local address for outgoing TCP connections, or {@code null}
+     * @param qos              the QoS value (IP Precedence 0..7) for TCP connections
+     * @throws IOException if initialization fails
+     */
+    public static MdRequester forSharedTransport(UdpTransport sharedTransport,
+                                                 long replyTimeoutUs, long connectTimeoutUs,
+                                                 InetAddress bindAddress, int qos) throws IOException {
+        return new MdRequester(sharedTransport, false, replyTimeoutUs, connectTimeoutUs,
+                bindAddress, UdpTransport.qosToTrafficClass(qos));
+    }
+
+    private MdRequester(UdpTransport udpTransport, boolean ownsUdpTransport,
+                        long replyTimeoutUs, long connectTimeoutUs,
+                        InetAddress bindAddress, int tcpTrafficClass) throws IOException {
         this.replyTimeoutUs = replyTimeoutUs;
         this.connectTimeoutUs = connectTimeoutUs;
         this.bindAddress = bindAddress;
-        this.tcpTrafficClass = UdpTransport.qosToTrafficClass(qos);
-        this.udpTransport = new UdpTransport(localPort, bindAddress, ttl, this.tcpTrafficClass);
+        this.tcpTrafficClass = tcpTrafficClass;
+        this.udpTransport = udpTransport;
+        this.ownsUdpTransport = ownsUdpTransport;
         this.tcpConnections = new ConcurrentHashMap<>();
         this.tcpLastUsedNanos = new ConcurrentHashMap<>();
         this.sequenceCounter = new AtomicInteger(0);
@@ -105,65 +138,29 @@ public class MdRequester implements AutoCloseable {
             this.tcpIdleEvictor = null;
         }
 
-        startUdpReplyListener();
+        if (ownsUdpTransport) {
+            startUdpReplyListener();
 
-        try {
-            if (!listenerReadyLatch.await(5, TimeUnit.SECONDS)) {
-                running = false;
-                shutdownEvictor();
-                udpTransport.close();
-                throw new IOException("MD Requester listener thread failed to start in time.");
+            try {
+                if (!listenerReadyLatch.await(5, TimeUnit.SECONDS)) {
+                    abortConstruction();
+                    throw new IOException("MD Requester listener thread failed to start in time.");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                abortConstruction();
+                throw new IOException("Interrupted while waiting for listener to start", e);
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            running = false;
-            shutdownEvictor();
-            udpTransport.close();
-            throw new IOException("Interrupted while waiting for listener to start", e);
         }
 
-        logger.info("MD Requester created on port {}", localPort);
+        logger.info("MD Requester created on port {}", udpTransport.getLocalPort());
     }
 
-    public MdRequester(int localPort, long replyTimeoutUs, long connectTimeoutUs) throws IOException {
-        this.replyTimeoutUs = replyTimeoutUs;
-        this.connectTimeoutUs = connectTimeoutUs;
-        this.bindAddress = null;
-        this.tcpTrafficClass = 0;
-        this.udpTransport = new UdpTransport(localPort);
-        this.tcpConnections = new ConcurrentHashMap<>();
-        this.tcpLastUsedNanos = new ConcurrentHashMap<>();
-        this.sequenceCounter = new AtomicInteger(0);
-        this.pendingSessions = new ConcurrentHashMap<>();
-        this.tcpSessionTransports = new ConcurrentHashMap<>();
-        this.pendingRetries = new ConcurrentHashMap<>();
-        this.retryScheduler = createRetryScheduler();
-        this.running = true;
-
-        if (connectTimeoutUs > 0) {
-            this.tcpIdleEvictor = createTcpIdleEvictor();
-        } else {
-            this.tcpIdleEvictor = null;
-        }
-
-        startUdpReplyListener();
-
-        try {
-            if (!listenerReadyLatch.await(5, TimeUnit.SECONDS)) {
-                running = false;
-                shutdownEvictor();
-                udpTransport.close();
-                throw new IOException("MD Requester listener thread failed to start in time.");
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            running = false;
-            shutdownEvictor();
-            udpTransport.close();
-            throw new IOException("Interrupted while waiting for listener to start", e);
-        }
-
-        logger.info("MD Requester created on port {}", localPort);
+    private void abortConstruction() {
+        running = false;
+        shutdownEvictor();
+        retryScheduler.shutdownNow();
+        udpTransport.close();
     }
 
     public void setTopologyCounters(int etbTopoCnt, int opTrnTopoCnt) {
@@ -387,6 +384,15 @@ public class MdRequester implements AutoCloseable {
         listener.setDaemon(true);
         listenerThreads.add(listener);
         listener.start();
+    }
+
+    /**
+     * Feeds an incoming UDP packet into reply processing. Called from the own
+     * listener thread or from an {@link MdUdpDispatcher} sharing the socket.
+     */
+    void dispatchUdp(ReceivedPacket received) {
+        processReplyPacket(received.getData(), received.getLength(),
+                received.getSourceAddress(), received.getSourcePort());
     }
 
     private void processReplyPacket(byte[] buffer, int length, InetAddress sourceAddress, int sourcePort) {
@@ -694,7 +700,9 @@ public class MdRequester implements AutoCloseable {
         });
         tcpConnections.clear();
         tcpLastUsedNanos.clear();
-        udpTransport.close();
+        if (ownsUdpTransport) {
+            udpTransport.close();
+        }
 
         // 5. Wait for listener threads to finish (should be fast now that sockets are closed)
         for (Thread t : listenerThreads) {

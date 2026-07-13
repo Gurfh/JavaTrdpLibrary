@@ -19,38 +19,42 @@ import java.nio.ByteOrder;
 public class TcpTransport implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(TcpTransport.class);
 
+    /** Default TCP connect timeout in milliseconds (matches {@link TrdpConstants#DEFAULT_MD_CONNECT_TIMEOUT_US}). */
+    public static final int DEFAULT_CONNECT_TIMEOUT_MS =
+            (int) (TrdpConstants.DEFAULT_MD_CONNECT_TIMEOUT_US / 1000);
+
     private final Socket socket;
     private DataInputStream dataIn;
 
     public TcpTransport(String host, int port) throws IOException {
-        this(host, port, null, 0);
+        this(host, port, null, 0, DEFAULT_CONNECT_TIMEOUT_MS);
     }
 
     /**
      * Creates a TCP transport with custom socket options.
      *
-     * @param host         the remote host to connect to
-     * @param port         the remote port to connect to
-     * @param bindAddress  the local address to bind to, or {@code null} for any local address
-     * @param trafficClass the IP traffic class byte (use {@link UdpTransport#qosToTrafficClass(int)}
-     *                     to convert from QoS), or 0 to leave at OS default
-     * @throws IOException if connection fails
+     * @param host             the remote host to connect to
+     * @param port             the remote port to connect to
+     * @param bindAddress      the local address to bind to, or {@code null} for any local address
+     * @param trafficClass     the IP traffic class byte (use {@link UdpTransport#qosToTrafficClass(int)}
+     *                         to convert from QoS), or 0 to leave at OS default
+     * @param connectTimeoutMs the connect timeout in milliseconds, or 0 for no timeout
+     * @throws IOException if connection fails or times out
      */
-    public TcpTransport(String host, int port, InetAddress bindAddress, int trafficClass) throws IOException {
-        if (bindAddress != null) {
-            this.socket = new Socket();
-            this.socket.bind(new InetSocketAddress(bindAddress, 0));
-            this.socket.connect(new InetSocketAddress(host, port));
-        } else {
-            this.socket = new Socket(host, port);
-        }
+    public TcpTransport(String host, int port, InetAddress bindAddress, int trafficClass,
+                        int connectTimeoutMs) throws IOException {
+        this.socket = new Socket();
         if (trafficClass != 0) {
             this.socket.setTrafficClass(trafficClass);
         }
+        if (bindAddress != null) {
+            this.socket.bind(new InetSocketAddress(bindAddress, 0));
+        }
+        this.socket.connect(new InetSocketAddress(host, port), connectTimeoutMs);
         logger.info("TCP Transport connected to {}:{}", host, port);
     }
 
-    public void send(byte[] data) throws IOException {
+    public synchronized void send(byte[] data) throws IOException {
         if (socket == null || socket.isClosed()) {
             throw new IOException("TCP socket not connected.");
         }

@@ -337,7 +337,7 @@ class TcpTransportTest {
         acceptThread.start();
 
         transport = new TcpTransport("127.0.0.1", port,
-                InetAddress.getLoopbackAddress(), UdpTransport.qosToTrafficClass(3));
+                InetAddress.getLoopbackAddress(), UdpTransport.qosToTrafficClass(3), 5000);
         assertThat(transport.isClosed()).isFalse();
 
         acceptThread.join(3000);
@@ -357,7 +357,7 @@ class TcpTransportTest {
         });
         acceptThread.start();
 
-        transport = new TcpTransport("127.0.0.1", port, null, 0);
+        transport = new TcpTransport("127.0.0.1", port, null, 0, 5000);
         assertThat(transport.isClosed()).isFalse();
 
         acceptThread.join(3000);

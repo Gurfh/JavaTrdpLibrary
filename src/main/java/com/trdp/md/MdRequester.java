@@ -647,7 +647,10 @@ public class MdRequester implements AutoCloseable {
         }
 
         // Create new connection with stored socket options
-        TcpTransport newTransport = new TcpTransport(host, port, bindAddress, tcpTrafficClass);
+        int connectTimeoutMs = connectTimeoutUs > 0
+                ? (int) Math.min(Math.max(connectTimeoutUs / 1000, 1), Integer.MAX_VALUE)
+                : TcpTransport.DEFAULT_CONNECT_TIMEOUT_MS;
+        TcpTransport newTransport = new TcpTransport(host, port, bindAddress, tcpTrafficClass, connectTimeoutMs);
         tcpConnections.put(key, newTransport);
         tcpLastUsedNanos.put(key, System.nanoTime());
         scheduleEvictionIfNeeded();

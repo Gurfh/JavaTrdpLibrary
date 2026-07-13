@@ -26,6 +26,8 @@
         <assertj.version>3.27.7</assertj.version>
         <jackson.version>2.18.6</jackson.version>
         <trdp.jvm.opens>--add-opens java.base/sun.nio.ch=ALL-UNNAMED</trdp.jvm.opens>
+        <!-- Overwritten by jacoco:prepare-agent; empty default keeps @{argLine} resolvable when JaCoCo is skipped -->
+        <argLine></argLine>
     </properties>
 
     <dependencies>
@@ -119,7 +121,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.3</version>
                 <configuration>
-                    <argLine>${trdp.jvm.opens}</argLine>
+                    <argLine>@{argLine} ${trdp.jvm.opens}</argLine>
                 </configuration>
             </plugin>
 
@@ -128,7 +130,7 @@
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <version>3.2.3</version>
                 <configuration>
-                    <argLine>${trdp.jvm.opens}</argLine>
+                    <argLine>@{argLine} ${trdp.jvm.opens}</argLine>
                 </configuration>
                 <executions>
                     <execution>
@@ -181,7 +183,7 @@
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
-                <version>0.8.11</version>
+                <version>0.8.13</version>
                 <executions>
                     <execution>
                         <goals>

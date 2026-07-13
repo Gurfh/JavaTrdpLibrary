@@ -185,6 +185,22 @@ class TrdpSessionFactoryIT {
     }
 
     @Test
+    void configureMdRejectsEqualUdpAndTcpPorts() throws Exception {
+        DeviceConfig config = TrdpConfig.load(Path.of("src/test/resources/trdp-config-full.xml"));
+        MdRequestHandler handler = request -> new MdResponse("reply".getBytes());
+
+        // Defaulted md-com-parameter: udp-port and tcp-port both 17225
+        MdComParameter mdCom = new MdComParameter(null, null, null, null, null, null,
+                null, null, null, null, null, null);
+        BusInterface bi = new BusInterface(1, "equal-ports", null, null, null, null, mdCom, null);
+
+        assertThatThrownBy(() -> TrdpSessionFactory.configureMd(config, bi, handler))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("udp-port")
+                .hasMessageContaining("17225");
+    }
+
+    @Test
     void configureMdMarshallerAvailable() throws Exception {
         DeviceConfig config = TrdpConfig.load(Path.of("src/test/resources/trdp-config-full.xml"));
         BusInterface bi = config.getBusInterfaces().get(0);

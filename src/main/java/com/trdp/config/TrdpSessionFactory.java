@@ -235,11 +235,20 @@ public class TrdpSessionFactory {
      * socket options (host-ip, TTL, QoS) and per-telegram overrides from
      * {@link MdParameter} and {@link ComParameter}.
      *
+     * <p>
+     * The {@code udp-port} and {@code tcp-port} must differ: the requester binds
+     * a UDP socket on {@code udp-port} and the replier binds both TCP and UDP
+     * sockets on {@code tcp-port}. If both were equal, two UDP sockets would bind
+     * the same port (both with {@code SO_REUSEADDR}) and the kernel would deliver
+     * each incoming datagram to only one of them, silently breaking either
+     * request reception or reply reception.
+     *
      * @param config       the parsed device configuration (for dataset resolution)
      * @param busInterface the bus interface to configure
      * @param handler      the request handler for the replier
      * @return a configured MD session with requester, replier, and marshaller
      * @throws IOException if socket creation fails
+     * @throws IllegalArgumentException if {@code udp-port} equals {@code tcp-port}
      */
     public static ConfiguredMdSession configureMd(
             DeviceConfig config, BusInterface busInterface,
@@ -255,6 +264,13 @@ public class TrdpSessionFactory {
 
         int udpPort = (int) mdCom.getUdpPort();
         int tcpPort = (int) mdCom.getTcpPort();
+        if (udpPort == tcpPort) {
+            throw new IllegalArgumentException(
+                    "md-com-parameter udp-port and tcp-port must differ (both are " + udpPort
+                    + "): the requester and replier would bind two UDP sockets on the same port"
+                    + " and incoming datagrams would reach only one of them."
+                    + " Configure distinct udp-port and tcp-port values.");
+        }
         long replyTimeoutUs = mdCom.getReplyTimeout();
         long connectTimeoutUs = mdCom.getConnectTimeout();
         long confirmTimeoutUs = mdCom.getConfirmTimeout();

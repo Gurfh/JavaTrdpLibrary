@@ -39,4 +39,16 @@ class MdReplyTest {
         String str = reply.toString();
         assertThat(str).contains("dataLen=0");
     }
+
+    @Test
+    void testDataIsDefensivelyCopied() {
+        byte[] original = {1, 2, 3};
+        MdReply reply = new MdReply(100, original, 0);
+
+        original[0] = 99;
+        assertThat(reply.getData()).containsExactly(1, 2, 3);
+
+        reply.getData()[0] = 42;
+        assertThat(reply.getData()).containsExactly(1, 2, 3);
+    }
 }

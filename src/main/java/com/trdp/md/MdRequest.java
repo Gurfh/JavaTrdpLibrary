@@ -3,6 +3,7 @@ package com.trdp.md;
 import com.trdp.protocol.TrdpMessageType;
 
 import java.net.InetAddress;
+import java.util.Arrays;
 import java.util.UUID;
 
 public class MdRequest {
@@ -20,7 +21,7 @@ public class MdRequest {
                      String destinationUri, InetAddress sourceAddress, int sourcePort,
                      int sequenceCounter, TrdpMessageType messageType) {
         this.comId = comId;
-        this.data = data;
+        this.data = data != null ? Arrays.copyOf(data, data.length) : null;
         this.sessionId = sessionId;
         this.sourceUri = sourceUri;
         this.destinationUri = destinationUri;
@@ -31,7 +32,7 @@ public class MdRequest {
     }
 
     public int getComId() { return comId; }
-    public byte[] getData() { return data; }
+    public byte[] getData() { return data != null ? Arrays.copyOf(data, data.length) : null; }
     public UUID getSessionId() { return sessionId; }
     public String getSourceUri() { return sourceUri; }
     public String getDestinationUri() { return destinationUri; }

@@ -48,4 +48,16 @@ class MdResponseTest {
         assertThat(response.isConfirmationRequested()).isFalse();
         assertThat(response.getReplyComId()).isEqualTo(100);
     }
+
+    @Test
+    void testDataIsDefensivelyCopied() {
+        byte[] original = {1, 2, 3};
+        MdResponse response = new MdResponse(original);
+
+        original[0] = 99;
+        assertThat(response.getData()).containsExactly(1, 2, 3);
+
+        response.getData()[0] = 42;
+        assertThat(response.getData()).containsExactly(1, 2, 3);
+    }
 }

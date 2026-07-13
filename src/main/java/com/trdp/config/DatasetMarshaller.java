@@ -7,8 +7,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Registry that maps ComIDs to dataset schemas and provides automatic
@@ -64,7 +66,8 @@ public class DatasetMarshaller {
                 DataSetDefinition dsDef = datasetById.get(dsId.intValue());
                 if (dsDef == null) continue;
 
-                List<TrdpDataset.FieldDefinition> schema = buildSchema(dsDef, datasetById);
+                List<TrdpDataset.FieldDefinition> schema =
+                        buildSchema(dsDef, datasetById, new HashSet<>());
                 schemas.put((int) telegram.getComId(), schema);
             }
         }
@@ -139,7 +142,12 @@ public class DatasetMarshaller {
     }
 
     private static List<TrdpDataset.FieldDefinition> buildSchema(
-            DataSetDefinition dsDef, Map<Integer, DataSetDefinition> datasetById) {
+            DataSetDefinition dsDef, Map<Integer, DataSetDefinition> datasetById,
+            Set<Integer> resolving) {
+        if (!resolving.add(dsDef.getId())) {
+            throw new IllegalArgumentException(
+                    "Cyclic dataset reference involving dataset " + dsDef.getId());
+        }
         List<TrdpDataset.FieldDefinition> schema = new ArrayList<>();
         for (DataSetElement elem : dsDef.getElements()) {
             String typeName = elem.getType();
@@ -155,7 +163,8 @@ public class DatasetMarshaller {
                     // Must be a nested dataset reference (>= 1000)
                     DataSetDefinition nested = datasetById.get(numericId);
                     if (nested != null) {
-                        List<TrdpDataset.FieldDefinition> nestedSchema = buildSchema(nested, datasetById);
+                        List<TrdpDataset.FieldDefinition> nestedSchema =
+                                buildSchema(nested, datasetById, resolving);
                         for (int i = 0; i < arraySize; i++) {
                             for (TrdpDataset.FieldDefinition nestedDef : nestedSchema) {
                                 String name = arraySize > 1
@@ -184,6 +193,8 @@ public class DatasetMarshaller {
                 schema.add(new TrdpDataset.FieldDefinition(fieldName, dataType));
             }
         }
+        // Unwind so sibling (diamond) references to this dataset stay legal
+        resolving.remove(dsDef.getId());
         return schema;
     }
 

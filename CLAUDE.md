@@ -57,7 +57,7 @@ All source lives under `src/main/java/com/trdp/`, tests under `src/test/java/com
 ## Known Pitfalls
 
 ### Byte array ownership
-All public `byte[]` boundaries make defensive copies: `TrdpPacket` (constructor and `getPayload()`), `ReceivedPacket` (constructor and `getData()`), `TrdpPdSession.PublisherEntry.putData()`, and `TrdpPdSession` subscriber dispatch (per-listener copy). Follow this pattern when adding new code that stores or exposes byte arrays.
+All public `byte[]` boundaries make defensive copies: `TrdpPacket` (constructor and `getPayload()`), `ReceivedPacket` (constructor and `getData()`), `TrdpPdSession.PublisherEntry.putData()`, `TrdpPdSession` subscriber dispatch (per-listener copy), the MD value objects (`MdRequest`, `MdReply`, `MdResponse` — constructor and `getData()`, null-safe), and `TrdpMdHeader.getSessionId()`. Follow this pattern when adding new code that stores or exposes byte arrays.
 
 ### TCP message framing
 TCP does not preserve message boundaries. Any TCP receiver must read the fixed-size header first (MD: 116 bytes), decode `datasetLength`, then read the exact payload — never assume a single `InputStream.read()` returns a complete TRDP packet. `MdReplier.handleTcpConnection()` and `MdRequester.startTcpReplyListener()` both use `DataInputStream.readFully()` for this. `TcpTransport.receive()` does a single read and should not be used for framed message protocols.
@@ -75,7 +75,10 @@ The 16-bit fractional part of TIMEDATE48 uses binary fractions (ticks of 1/65536
 `PdRequester` maintains independent sequence counters per ComID via `ConcurrentHashMap<Integer, AtomicInteger>`. The `request()` method also has a 6-parameter overload accepting an optional `byte[] payload`.
 
 ### Multicast interface selection
-`UdpTransport.joinMulticastGroup(InetAddress)` auto-selects a network interface. On multi-homed systems, use the overload `joinMulticastGroup(InetAddress, NetworkInterface)` to specify the interface explicitly.
+`UdpTransport.joinMulticastGroup(InetAddress)` auto-selects a network interface. On multi-homed systems, use the overload `joinMulticastGroup(InetAddress, NetworkInterface)` to specify the interface explicitly. Membership keys are retained; `leaveMulticastGroup(InetAddress)` drops a membership (returns false if the group was never joined). `TrdpPdSession.removeSubscribers()` does not auto-leave groups (other subscribers may share them).
+
+### PD pull reply routing
+`TrdpPdSession.handlePullRequest()` sends the Pp reply to the requester's source address and port when the Pr has no `replyIpAddress`. With an explicit `replyIpAddress` (redirected reply, e.g. multicast group or subscriber host), the reply goes to that address on the session's **own local port** — per the IEC 61375-2-3 convention that all PD endpoints share one well-known port. A redirected reply therefore only reaches consumers listening on the same PD port as the publisher.
 
 ### URI field limits
 `TrdpMdHeader` source/destination URI fields are 32 bytes. Strings exceeding this are truncated at valid UTF-8 character boundaries (never splits multi-byte sequences). Keep URIs short.

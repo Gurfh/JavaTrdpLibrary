@@ -5,6 +5,8 @@ import com.trdp.util.TrdpDataset;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -176,5 +178,66 @@ class DatasetMarshallerTest {
         assertThatThrownBy(() -> marshaller.unmarshall(9999, new byte[0]))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("9999");
+    }
+
+    // --- Cycle detection ---
+
+    @Test
+    void cyclicDatasetReferenceIsRejected() throws TrdpConfigException {
+        String xml = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <device host-name="CYCLIC">
+                  <bus-interface-list>
+                    <bus-interface network-id="1" name="eth0">
+                      <telegram com-id="7000" data-set-id="1001" type="source"/>
+                    </bus-interface>
+                  </bus-interface-list>
+                  <data-set-list>
+                    <data-set id="1001" name="A">
+                      <element type="1002" name="b"/>
+                    </data-set>
+                    <data-set id="1002" name="B">
+                      <element type="1001" name="a"/>
+                    </data-set>
+                  </data-set-list>
+                </device>
+                """;
+        DeviceConfig config = TrdpConfig.load(
+                new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+
+        assertThatThrownBy(() -> DatasetMarshaller.from(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Cyclic");
+    }
+
+    @Test
+    void diamondDatasetReferenceIsAllowed() throws TrdpConfigException {
+        // 1001 references 1002 twice (sibling references) — shared, not cyclic
+        String xml = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <device host-name="DIAMOND">
+                  <bus-interface-list>
+                    <bus-interface network-id="1" name="eth0">
+                      <telegram com-id="7001" data-set-id="1001" type="source"/>
+                    </bus-interface>
+                  </bus-interface-list>
+                  <data-set-list>
+                    <data-set id="1001" name="A">
+                      <element type="1002" name="first"/>
+                      <element type="1002" name="second"/>
+                    </data-set>
+                    <data-set id="1002" name="B">
+                      <element type="UINT8" name="value"/>
+                    </data-set>
+                  </data-set-list>
+                </device>
+                """;
+        DeviceConfig config = TrdpConfig.load(
+                new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+
+        DatasetMarshaller diamondMarshaller = DatasetMarshaller.from(config);
+        assertThat(diamondMarshaller.getSchema(7001))
+                .extracting(TrdpDataset.FieldDefinition::getName)
+                .containsExactly("first.value", "second.value");
     }
 }

@@ -559,16 +559,23 @@ public class TrdpPdSession implements AutoCloseable {
     private void handlePullRequest(PublisherEntry pub, TrdpPdHeader requestHeader,
                                    ReceivedPacket received) {
         try {
-            // Determine reply address
+            // Determine reply destination. With an explicit replyIpAddress the
+            // reply is redirected to a third party (e.g. a multicast group or a
+            // subscriber host), for which the request's source port carries no
+            // meaning — per IEC 61375-2-3 all PD endpoints share one well-known
+            // port, so the session's own port is used. Without replyIpAddress
+            // the reply goes straight back to the requester's source socket.
             InetAddress replyAddr;
+            int replyPort;
             if (requestHeader.getReplyIpAddress() != 0) {
                 byte[] ipBytes = ByteBuffer.allocate(4).putInt(requestHeader.getReplyIpAddress()).array();
                 replyAddr = InetAddress.getByAddress(ipBytes);
+                replyPort = transport.getLocalPort();
             } else {
                 replyAddr = received.getSourceAddress();
+                replyPort = received.getSourcePort();
             }
 
-            int replyPort = received.getSourcePort();
             int replyComId = (requestHeader.getReplyComId() != 0)
                     ? requestHeader.getReplyComId() : pub.comId;
 
@@ -586,6 +593,13 @@ public class TrdpPdSession implements AutoCloseable {
         Supplier<byte[]> supplier = entry.dataSupplier;
         byte[] data = supplier != null ? supplier.get() : entry.currentData.get();
         if (data == null || data.length == 0) return;
+        if (data.length > TrdpConstants.TRDP_MAX_PD_DATA_SIZE) {
+            // putData() validates on staging; supplier output can only be checked here
+            entry.sendErrors.incrementAndGet();
+            logger.error("PD Session: data for ComID {} exceeds maximum PD data size ({} > {}), send skipped",
+                    entry.comId, data.length, TrdpConstants.TRDP_MAX_PD_DATA_SIZE);
+            return;
+        }
         try {
             sendPd(entry, data, entry.destinationAddress, entry.destinationPort,
                     TrdpMessageType.PD, 0);

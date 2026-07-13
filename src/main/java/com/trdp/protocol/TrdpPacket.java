@@ -67,13 +67,15 @@ public class TrdpPacket {
         }
         
         int payloadLength = header.getDatasetLength();
-        
+
         // Verify that the received data contains the full payload.
         // We do not strictly check for padding at the end in decode() because
         // the transport layer might deliver the exact buffer size.
-        if (data.length < headerSize + payloadLength) {
-            throw new IllegalArgumentException("Data length mismatch: expected at least " + 
-                                             (headerSize + payloadLength) + " bytes, got " + data.length);
+        // Compare against the remaining bytes (not headerSize + payloadLength,
+        // which can overflow for corrupt/hostile length fields).
+        if (payloadLength < 0 || payloadLength > data.length - headerSize) {
+            throw new IllegalArgumentException("Data length mismatch: declared payload " +
+                                             payloadLength + " bytes, got " + (data.length - headerSize));
         }
         
         byte[] payload = Arrays.copyOfRange(data, headerSize, headerSize + payloadLength);

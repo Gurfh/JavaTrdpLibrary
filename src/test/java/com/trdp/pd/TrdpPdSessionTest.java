@@ -846,4 +846,17 @@ class TrdpPdSessionTest {
         @Override public void onTimeout(PdEvent event) {}
         @Override public void onValidityRestored(PdEvent event) {}
     }
+
+    @Test
+    void testOversizedSupplierDataSkippedAndCounted() throws Exception {
+        session = new TrdpPdSession(0);
+        PdPublisherHandle pub = session.addPublisher(19360, "127.0.0.1", 19961, 20_000);
+        pub.setDataSupplier(() -> new byte[TrdpConstants.TRDP_MAX_PD_DATA_SIZE + 1]);
+        session.start();
+
+        Thread.sleep(150);
+
+        assertThat(pub.getSendErrors()).as("oversized supplier data must be counted as send errors").isGreaterThan(0);
+        assertThat(pub.getPacketsSent()).as("oversized supplier data must never be sent").isZero();
+    }
 }

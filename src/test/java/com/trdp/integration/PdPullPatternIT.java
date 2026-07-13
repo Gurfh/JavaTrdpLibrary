@@ -1,6 +1,8 @@
 package com.trdp.integration;
 
 import com.trdp.network.UdpTransport;
+import com.trdp.pd.PdEvent;
+import com.trdp.pd.PdEventListener;
 import com.trdp.pd.PdPublisherHandle;
 import com.trdp.pd.TrdpPdSession;
 import com.trdp.protocol.TrdpConstants;
@@ -14,44 +16,67 @@ import static org.assertj.core.api.Assertions.*;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 class PdPullPatternIT {
 
     private TrdpPdSession pubSession;
+    private TrdpPdSession subSession;
     private UdpTransport externalTransport;
 
     @AfterEach
     void tearDown() {
         if (externalTransport != null) externalTransport.close();
+        if (subSession != null) subSession.close();
         if (pubSession != null) pubSession.close();
     }
 
     @Test
     void testPullPatternWithReplyAddress() throws Exception {
         int comId = 5000;
-        int publisherListenPort = 19601;
+        int pdPort = 19601;
         byte[] expectedData = "Pulled Data".getBytes();
 
-        // Publisher session (listening for requests)
-        pubSession = new TrdpPdSession(publisherListenPort);
-        PdPublisherHandle pub = pubSession.addPublisher(comId, "127.0.0.1", 17224, 0);
+        // Two "devices" on the shared PD port (IEC single-port convention):
+        // publisher at 127.0.0.1, reply-consuming subscriber at 127.0.0.2.
+        pubSession = new TrdpPdSession(pdPort, InetAddress.getByName("127.0.0.1"), 64, 5);
+        PdPublisherHandle pub = pubSession.addPublisher(comId, "127.0.0.1", pdPort, 0);
         pub.putData(expectedData);
         pubSession.start();
 
+        CountDownLatch replyLatch = new CountDownLatch(1);
+        AtomicReference<PdEvent> replyEvent = new AtomicReference<>();
+        subSession = new TrdpPdSession(pdPort, InetAddress.getByName("127.0.0.2"), 64, 5);
+        subSession.addSubscriber(comId, null, 0, new PdEventListener() {
+            @Override
+            public void onData(PdEvent event) {
+                replyEvent.set(event);
+                replyLatch.countDown();
+            }
+
+            @Override
+            public void onTimeout(PdEvent event) {}
+
+            @Override
+            public void onValidityRestored(PdEvent event) {}
+        });
+        subSession.start();
+
         Thread.sleep(100);
 
-        // Send PD_REQUEST with explicit replyIpAddress
+        // Request from an external socket, redirecting the reply to the
+        // subscriber's host — the publisher must send it to the shared PD
+        // port of that address, not to the requester's source port.
         externalTransport = new UdpTransport(0);
-        sendPdRequest(externalTransport, comId, publisherListenPort, 0, "127.0.0.1");
+        sendPdRequest(externalTransport, comId, pdPort, 0, "127.0.0.2");
 
-        // Receive PD_REPLY routed to the specified reply address
-        byte[] buffer = new byte[TrdpConstants.TRDP_MAX_PACKET_SIZE];
-        var received = externalTransport.receiveWithSource(buffer, 2000);
-
-        assertThat(received).as("Should receive the pulled data via reply address").isNotNull();
-        TrdpPacket reply = TrdpPacket.decode(Arrays.copyOf(received.getData(), received.getLength()));
-        assertThat(reply.getHeader().getMessageType()).isEqualTo(TrdpMessageType.PD_REPLY);
-        assertThat(reply.getPayload()).isEqualTo(expectedData);
+        assertThat(replyLatch.await(2, TimeUnit.SECONDS))
+                .as("Reply should arrive at the subscriber session on the shared PD port")
+                .isTrue();
+        assertThat(replyEvent.get().getType()).isEqualTo(PdEvent.Type.REPLY);
+        assertThat(replyEvent.get().getData()).isEqualTo(expectedData);
     }
 
     @Test

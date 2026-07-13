@@ -113,7 +113,7 @@ public class TrdpMdHeader extends TrdpPdHeader {
     }
 
     public byte[] getSessionId() {
-        return sessionId;
+        return sessionId.clone();
     }
 
     // --- URI Handling ---

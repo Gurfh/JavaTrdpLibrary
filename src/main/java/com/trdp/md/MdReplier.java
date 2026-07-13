@@ -20,6 +20,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
 import java.util.Iterator;
+import java.util.Set;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -51,7 +52,9 @@ public class MdReplier implements AutoCloseable {
     private final ServerSocket tcpListener;
     private final MdRequestHandler handler;
     private final ExecutorService executor; // Manages listener threads
-    private final ExecutorService workerPool; // Manages user request processing
+    private final ExecutorService workerPool; // Manages UDP request processing
+    private final ExecutorService connectionPool; // One thread per live TCP connection
+    private final Set<Socket> activeTcpConnections = ConcurrentHashMap.newKeySet();
     private volatile boolean running;
 
     private final long confirmTimeoutUs;
@@ -138,12 +141,21 @@ public class MdReplier implements AutoCloseable {
 
         // Bounded worker pool with CallerRunsPolicy for backpressure:
         // when pool and queue are full, the submitting listener thread processes
-        // the request itself, naturally throttling intake.
+        // the request itself, naturally throttling intake. UDP requests only —
+        // long-lived TCP connections would occupy workers for their lifetime
+        // and CallerRunsPolicy would block the accept loop.
         this.workerPool = new ThreadPoolExecutor(
             2, MAX_WORKER_THREADS,
             60L, TimeUnit.SECONDS,
             new LinkedBlockingQueue<>(WORKER_QUEUE_CAPACITY),
             new ThreadPoolExecutor.CallerRunsPolicy());
+
+        // TCP connections each get a dedicated (mostly IO-blocked) thread
+        this.connectionPool = Executors.newCachedThreadPool(r -> {
+            Thread t = new Thread(r, "MD-Replier-TCP-Conn");
+            t.setDaemon(true);
+            return t;
+        });
 
         logger.info("MD Replier created (UDP port {}, TCP port {})",
                 udpTransport.getLocalPort(), tcpListener.getLocalPort());
@@ -234,8 +246,9 @@ public class MdReplier implements AutoCloseable {
         while (running) {
             try {
                 Socket clientSocket = tcpListener.accept();
-                // Handle each TCP connection in its own thread (managed by worker pool)
-                workerPool.submit(() -> handleTcpConnection(clientSocket));
+                // Track the socket so close() can unblock the reader thread
+                activeTcpConnections.add(clientSocket);
+                connectionPool.submit(() -> handleTcpConnection(clientSocket));
             } catch (SocketException e) {
                 // Socket closed, normal shutdown
             } catch (IOException e) {
@@ -297,6 +310,8 @@ public class MdReplier implements AutoCloseable {
             }
         } catch (IOException e) {
             if (running) logger.debug("TCP connection ended with {}: {}", remoteInfo, e.getMessage());
+        } finally {
+            activeTcpConnections.remove(clientSocket);
         }
     }
 
@@ -394,7 +409,7 @@ public class MdReplier implements AutoCloseable {
             TrdpPacket packet = TrdpPacket.decode(rawData);
             processRequestObject(packet, sourceAddress, sourcePort, tcpSocket);
         } catch (Exception e) {
-            logger.warn("Failed to decode UDP packet from {}", sourceAddress);
+            logger.warn("Failed to decode UDP packet from {}: {}", sourceAddress, e.getMessage());
         }
     }
 
@@ -536,6 +551,15 @@ public class MdReplier implements AutoCloseable {
         if (ownsUdpTransport) {
             udpTransport.close();
         }
+        // Close live client sockets to unblock connection reader threads
+        for (Socket socket : activeTcpConnections) {
+            try {
+                socket.close();
+            } catch (IOException e) {
+                logger.debug("Error closing TCP connection: {}", e.getMessage());
+            }
+        }
+        activeTcpConnections.clear();
 
         // 2. Shutdown confirm timeout checker
         ScheduledFuture<?> f = pendingConfirmCheck;
@@ -549,6 +573,7 @@ public class MdReplier implements AutoCloseable {
         // 3. Shutdown executors (threads should exit quickly now that sockets are closed)
         executor.shutdownNow();
         workerPool.shutdown();
+        connectionPool.shutdown();
 
         try {
             if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
@@ -557,9 +582,13 @@ public class MdReplier implements AutoCloseable {
             if (!workerPool.awaitTermination(2, TimeUnit.SECONDS)) {
                 workerPool.shutdownNow();
             }
+            if (!connectionPool.awaitTermination(2, TimeUnit.SECONDS)) {
+                connectionPool.shutdownNow();
+            }
         } catch (InterruptedException e) {
             executor.shutdownNow();
             workerPool.shutdownNow();
+            connectionPool.shutdownNow();
             Thread.currentThread().interrupt();
         }
 

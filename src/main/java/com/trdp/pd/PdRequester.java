@@ -19,7 +19,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Implements the Requester role for the TRDP Process Data (PD) Pull Pattern.
  * <p>
  * The Requester sends PD-PDU request telegrams to a Publisher to solicit a PD-PDU reply.
- * The reply is typically received by a {@link TrdpPdSession} subscriber.
+ * <p>
+ * Reply routing: when {@code replyIpAddress} is set, the Publisher sends the
+ * reply to that address on the Publisher's own PD port (per the IEC 61375-2-3
+ * shared-port convention) — point it at a host where a {@link TrdpPdSession}
+ * subscriber listens on the same PD port as the Publisher. When
+ * {@code replyIpAddress} is null/0, the reply goes back to this requester's
+ * own socket (source address and port of the request); note this class has no
+ * receive loop, so in that case the reply must be consumed externally.
  */
 public class PdRequester implements AutoCloseable {
     private static final Logger logger = LoggerFactory.getLogger(PdRequester.class);

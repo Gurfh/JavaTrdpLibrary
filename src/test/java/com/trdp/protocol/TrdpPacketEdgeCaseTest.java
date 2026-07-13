@@ -155,4 +155,29 @@ class TrdpPacketEdgeCaseTest {
             assertThat(decoded.getPayload()).containsExactly(4, 5, 6);
         }
     }
+
+    @Test
+    void testDecodeRejectsHugeDeclaredPayloadLength() {
+        // headerSize + payloadLength would overflow int; must still be rejected
+        TrdpPdHeader header = new TrdpPdHeader();
+        header.setMessageType(TrdpMessageType.PD);
+        header.setComId(1);
+        header.setDatasetLength(Integer.MAX_VALUE - 10);
+
+        assertThatThrownBy(() -> TrdpPacket.decode(header.encode()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("length");
+    }
+
+    @Test
+    void testDecodeRejectsNegativeDeclaredPayloadLength() {
+        TrdpPdHeader header = new TrdpPdHeader();
+        header.setMessageType(TrdpMessageType.PD);
+        header.setComId(1);
+        header.setDatasetLength(-4);
+
+        assertThatThrownBy(() -> TrdpPacket.decode(header.encode()))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("length");
+    }
 }

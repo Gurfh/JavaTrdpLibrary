@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.net.*;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.MembershipKey;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * {@link DatagramChannel}-based UDP transport with multicast group management
@@ -24,6 +25,7 @@ public class UdpTransport implements AutoCloseable {
     private final DatagramChannel channel;
     private final DatagramSocket socket;
     private final int port;
+    private final ConcurrentHashMap<InetAddress, MembershipKey> memberships = new ConcurrentHashMap<>();
 
     /**
      * Converts a QoS value (IP Precedence 0..7) to the traffic class byte
@@ -78,7 +80,7 @@ public class UdpTransport implements AutoCloseable {
 
         int boundPort = socket.getLocalPort();
         if (port > 0) {
-            logger.debug("UDP Transport created on port {} (ttl={}, tc=0x{}))",
+            logger.debug("UDP Transport created on port {} (ttl={}, tc=0x{})",
                     port, ttl, Integer.toHexString(trafficClass));
         } else {
             logger.debug("UDP Transport created on ephemeral port {} (ttl={}, tc=0x{})",
@@ -100,7 +102,25 @@ public class UdpTransport implements AutoCloseable {
 
     public void joinMulticastGroup(InetAddress group, NetworkInterface networkInterface) throws IOException {
         MembershipKey key = channel.join(group, networkInterface);
+        memberships.put(group, key);
         logger.debug("Joined multicast group {} on port {} via {}", group.getHostAddress(), port, networkInterface.getName());
+    }
+
+    /**
+     * Leaves a previously joined multicast group.
+     *
+     * @param group the multicast group to leave
+     * @return {@code true} if the group was joined on this transport and has been left,
+     *         {@code false} if no membership existed
+     */
+    public boolean leaveMulticastGroup(InetAddress group) {
+        MembershipKey key = memberships.remove(group);
+        if (key == null) {
+            return false;
+        }
+        key.drop();
+        logger.debug("Left multicast group {} on port {}", group.getHostAddress(), port);
+        return true;
     }
 
     public void send(byte[] data, InetAddress address, int port) throws IOException {

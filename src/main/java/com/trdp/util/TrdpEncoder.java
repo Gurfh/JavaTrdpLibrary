@@ -117,12 +117,36 @@ public class TrdpEncoder {
     
     public TrdpEncoder putString(String value, int maxLength) {
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-        int length = Math.min(bytes.length, maxLength);
+        int length = bytes.length <= maxLength
+                ? bytes.length
+                : utf8TruncationLength(bytes, maxLength);
         buffer.put(bytes, 0, length);
         for (int i = length; i < maxLength; i++) {
             buffer.put((byte) 0);
         }
         return this;
+    }
+
+    /**
+     * Returns the largest prefix length &le; {@code maxLength} that does not
+     * split a multi-byte UTF-8 sequence.
+     */
+    private static int utf8TruncationLength(byte[] bytes, int maxLength) {
+        int length = 0;
+        int i = 0;
+        while (i < bytes.length) {
+            byte lead = bytes[i];
+            int charLen;
+            if ((lead & 0x80) == 0) charLen = 1;
+            else if ((lead & 0xE0) == 0xC0) charLen = 2;
+            else if ((lead & 0xF0) == 0xE0) charLen = 3;
+            else charLen = 4;
+
+            if (i + charLen > maxLength) break;
+            i += charLen;
+            length = i;
+        }
+        return length;
     }
     
     public TrdpEncoder align(int alignment) {

@@ -174,4 +174,18 @@ class TrdpEncoderDecoderEdgeCaseTest {
         TrdpDecoder decoder = new TrdpDecoder(encoder.toByteArray());
         assertThat(decoder.getUtf16()).isEqualTo('\u00E9');
     }
+
+    @Test
+    void testPutStringTruncatesAtUtf8CharacterBoundary() {
+        // "\u03b1\u03b1\u03b1" is 6 UTF-8 bytes (3 x 2); maxLength 5 must not split the third char
+        TrdpEncoder encoder = new TrdpEncoder(16);
+        encoder.putString("\u03b1\u03b1\u03b1", 5);
+        byte[] encoded = encoder.toByteArray();
+
+        assertThat(encoded).hasSize(5);
+        assertThat(encoded[4]).as("truncated tail is zero-padded").isZero();
+
+        TrdpDecoder decoder = new TrdpDecoder(encoded);
+        assertThat(decoder.getString(5)).isEqualTo("\u03b1\u03b1");
+    }
 }

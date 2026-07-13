@@ -269,7 +269,7 @@ public class TrdpSessionFactory {
 
         TransportProtocol defaultProtocol = "TCP".equalsIgnoreCase(mdCom.getProtocol())
                 ? TransportProtocol.TCP : TransportProtocol.UDP;
-        int defaultRetries = (int) mdCom.getRetries();
+        int defaultRetries = clampRetries((int) mdCom.getRetries());
 
         MdRequester requester;
         MdReplier replier;
@@ -349,7 +349,7 @@ public class TrdpSessionFactory {
                 // Override retries from ComParameter
                 int cpRetries = config.getComParameterById(comParamId)
                         .map(cp -> (int) cp.getRetries()).orElse(perRetries);
-                perRetries = Math.min(cpRetries, 2); // clamp to 0..2
+                perRetries = clampRetries(cpRetries);
             }
 
             telegramConfigs.put(comId, new MdTelegramConfig(
@@ -357,6 +357,13 @@ public class TrdpSessionFactory {
         }
 
         return new ConfiguredMdSession(requester, replier, dispatcher, marshaller, telegramConfigs);
+    }
+
+    /**
+     * Clamps a configured retry count to the IEC 61375-2-3 range (0..2, Table A.19).
+     */
+    private static int clampRetries(int retries) {
+        return Math.max(0, Math.min(retries, 2));
     }
 
     /**

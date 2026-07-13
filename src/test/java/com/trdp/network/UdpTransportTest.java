@@ -92,4 +92,14 @@ class UdpTransportTest {
         assertThat(received).isZero();
         assertThat(elapsed).isGreaterThanOrEqualTo(500);
     }
+
+    @Test
+    void testLeaveMulticastGroup() throws IOException {
+        transport = new UdpTransport(0);
+        InetAddress group = InetAddress.getByName("239.255.42.42");
+        transport.joinMulticastGroup(group);
+
+        assertThat(transport.leaveMulticastGroup(group)).isTrue();
+        assertThat(transport.leaveMulticastGroup(group)).as("second leave is a no-op").isFalse();
+    }
 }
